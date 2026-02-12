@@ -1,0 +1,155 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Dark background palette */
+  --bg-primary: #0f1117;
+  --bg-secondary: #161820;
+  --bg-tertiary: #1e212b;
+  --bg-elevated: #252830;
+  --bg-hover: #2d3040;
+
+  /* Accent colors */
+  --color-profit: #00d084;
+  --color-profit-light: #33e0a0;
+  --color-profit-muted: rgba(0, 208, 132, 0.15);
+  --color-loss: #ef4444;
+  --color-loss-light: #f87171;
+  --color-loss-muted: rgba(239, 68, 68, 0.15);
+  --color-info: #3b82f6;
+  --color-info-light: #60a5fa;
+  --color-info-muted: rgba(59, 130, 246, 0.15);
+  --color-warning: #f59e0b;
+  --color-warning-light: #fbbf24;
+  --color-warning-muted: rgba(245, 158, 11, 0.15);
+  --color-accent: #8b5cf6;
+  --color-accent-light: #a78bfa;
+
+  /* Text colors */
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+
+  /* Border */
+  --border-color: rgba(255, 255, 255, 0.08);
+  --border-color-hover: rgba(255, 255, 255, 0.15);
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-hover);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3d4e;
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-hover) var(--bg-primary);
+}
+
+/* Utility classes */
+@layer components {
+  .card {
+    @apply bg-dark-700 border border-white/[0.08] rounded-lg p-4;
+  }
+
+  .card-hover {
+    @apply card hover:border-white/[0.15] transition-colors duration-200;
+  }
+
+  .btn-primary {
+    @apply px-4 py-2 bg-info text-white rounded-lg hover:bg-info-dark transition-colors duration-200 font-medium text-sm;
+  }
+
+  .btn-secondary {
+    @apply px-4 py-2 bg-dark-500 text-text-primary rounded-lg hover:bg-dark-400 transition-colors duration-200 font-medium text-sm border border-white/[0.08];
+  }
+
+  .btn-danger {
+    @apply px-4 py-2 bg-loss/20 text-loss-light rounded-lg hover:bg-loss/30 transition-colors duration-200 font-medium text-sm border border-loss/30;
+  }
+
+  .btn-success {
+    @apply px-4 py-2 bg-profit/20 text-profit-light rounded-lg hover:bg-profit/30 transition-colors duration-200 font-medium text-sm border border-profit/30;
+  }
+
+  .status-badge {
+    @apply px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .input-field {
+    @apply bg-dark-800 border border-white/[0.08] rounded-lg px-3 py-2 text-text-primary text-sm focus:outline-none focus:border-info/50 transition-colors;
+  }
+
+  .table-header {
+    @apply text-xs font-medium text-text-muted uppercase tracking-wider;
+  }
+
+  .table-cell {
+    @apply px-4 py-3 text-sm text-text-secondary;
+  }
+
+  .pnl-positive {
+    @apply text-profit;
+  }
+
+  .pnl-negative {
+    @apply text-loss;
+  }
+
+  .glow-green {
+    box-shadow: 0 0 20px rgba(0, 208, 132, 0.15);
+  }
+
+  .glow-red {
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.15);
+  }
+
+  .glow-blue {
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.15);
+  }
+}
+
+/* Recharts overrides for dark theme */
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: rgba(255, 255, 255, 0.05);
+}
+
+.recharts-text {
+  fill: #64748b;
+  font-size: 11px;
+}
+
+.recharts-tooltip-wrapper {
+  outline: none;
+}

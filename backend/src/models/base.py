@@ -1,5 +1,7 @@
 """Base model and database session setup for the Overture system."""
 
+import asyncio
+import logging
 from collections.abc import AsyncGenerator
 from datetime import datetime
 from uuid import uuid4
@@ -10,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from src.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Naming convention for constraints (helps Alembic generate clean migrations)
 convention = {
@@ -59,14 +63,31 @@ class Base(DeclarativeBase):
     )
 
 
-async def init_db() -> None:
+async def init_db(retries: int = 5, delay: float = 2.0) -> None:
     """Create all database tables.
 
     Should be called once at application startup. In production,
     prefer Alembic migrations over auto-creation.
+
+    Retries connection with exponential backoff to handle cases where
+    the database is still starting up (e.g. Railway deployments).
     """
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    for attempt in range(1, retries + 1):
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            logger.info("Database initialized successfully.")
+            return
+        except Exception as exc:
+            if attempt == retries:
+                logger.error("Failed to connect to database after %d attempts: %s", retries, exc)
+                raise
+            wait = delay * (2 ** (attempt - 1))
+            logger.warning(
+                "Database connection attempt %d/%d failed (%s). Retrying in %.1fs...",
+                attempt, retries, exc, wait,
+            )
+            await asyncio.sleep(wait)
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:

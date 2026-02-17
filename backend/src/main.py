@@ -6,12 +6,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.api.routes import ideas, portfolio, agents, knowledge, trades
 from src.api.websocket import router as ws_router
 from src.config import settings
-from src.models.base import init_db
+from src.models import base as db_base
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db()
+    await db_base.init_db()
     yield
 
 
@@ -43,4 +43,8 @@ app.include_router(ws_router, prefix="/ws", tags=["websocket"])
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": "0.1.0"}
+    return {
+        "status": "ok",
+        "version": "0.1.0",
+        "database": "connected" if db_base.db_ready else "unavailable",
+    }

@@ -16,7 +16,7 @@ class WebSocketClient {
       (process.env.NEXT_PUBLIC_API_URL
         ? process.env.NEXT_PUBLIC_API_URL.replace(/^http/, 'ws')
         : 'ws://localhost:8000');
-    this.url = `${wsBase}/ws/dashboard`;
+    this.url = `${wsBase}/ws/live`;
   }
 
   connect(channels: string[] = []) {

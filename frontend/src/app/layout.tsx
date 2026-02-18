@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import Sidebar from '@/components/layout/Sidebar';
+import WebSocketProvider from '@/components/providers/WebSocketProvider';
 
 export const metadata: Metadata = {
   title: 'Overture - AI Hedge Fund Dashboard',
@@ -21,12 +22,14 @@ export default function RootLayout({
         />
       </head>
       <body className="bg-dark-800 text-text-primary antialiased">
-        <div className="flex min-h-screen">
-          <Sidebar />
-          <main className="flex-1 ml-60">
-            <div className="p-6 max-w-[1600px]">{children}</div>
-          </main>
-        </div>
+        <WebSocketProvider>
+          <div className="flex min-h-screen">
+            <Sidebar />
+            <main className="flex-1 ml-60">
+              <div className="p-6 max-w-[1600px]">{children}</div>
+            </main>
+          </div>
+        </WebSocketProvider>
       </body>
     </html>
   );

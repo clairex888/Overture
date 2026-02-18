@@ -1,14 +1,25 @@
 import type {
   Idea,
+  IdeaStats,
   Trade,
-  Portfolio,
+  PendingSummary,
+  ActiveSummary,
+  PortfolioOverview,
   Position,
-  KnowledgeEntry,
-  AgentStatus,
   RiskMetrics,
+  PerformanceMetrics,
+  AllocationBreakdown,
+  AllAgentsStatus,
+  AgentLogEntry,
+  LoopControlResponse,
+  KnowledgeEntry,
   MarketOutlook,
+  SourceCredibility,
+  EducationalContent,
   Alert,
-  RLStats,
+  AgentRLStats,
+  RLEpisode,
+  ReplayBufferStats,
 } from '@/types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -35,64 +46,41 @@ export const ideasAPI = {
     return fetchAPI<Idea[]>(`/api/ideas${qs}`);
   },
   get: (id: string) => fetchAPI<Idea>(`/api/ideas/${id}`),
-  create: (data: Partial<Idea>) =>
+  create: (data: Record<string, any>) =>
     fetchAPI<Idea>('/api/ideas', {
       method: 'POST',
       body: JSON.stringify(data),
     }),
-  update: (id: string, data: Partial<Idea>) =>
+  update: (id: string, data: Record<string, any>) =>
     fetchAPI<Idea>(`/api/ideas/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
   delete: (id: string) =>
     fetchAPI<void>(`/api/ideas/${id}`, { method: 'DELETE' }),
-  generate: () =>
-    fetchAPI<{ message: string; ideas: Idea[] }>('/api/ideas/generate', {
+  generate: (data?: Record<string, any>) =>
+    fetchAPI<Idea[]>('/api/ideas/generate', {
       method: 'POST',
+      body: data ? JSON.stringify(data) : undefined,
     }),
   validate: (id: string) =>
-    fetchAPI<{ message: string; validation: Record<string, any> }>(
-      `/api/ideas/${id}/validate`,
-      { method: 'POST' }
-    ),
-  stats: () =>
-    fetchAPI<{
-      total: number;
-      by_status: Record<string, number>;
-      by_source: Record<string, number>;
-      avg_confidence: number;
-    }>('/api/ideas/stats'),
+    fetchAPI<Idea>(`/api/ideas/${id}/validate`, { method: 'POST' }),
+  execute: (id: string) =>
+    fetchAPI<Idea>(`/api/ideas/${id}/execute`, { method: 'POST' }),
+  stats: () => fetchAPI<IdeaStats>('/api/ideas/stats'),
 };
 
 // Portfolio API
 export const portfolioAPI = {
-  list: () => fetchAPI<Portfolio[]>('/api/portfolio'),
-  get: (id: string) => fetchAPI<Portfolio>(`/api/portfolio/${id}`),
-  create: (data: Partial<Portfolio>) =>
-    fetchAPI<Portfolio>('/api/portfolio', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
-  update: (id: string, data: Partial<Portfolio>) =>
-    fetchAPI<Portfolio>(`/api/portfolio/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    }),
-  positions: (id: string) =>
-    fetchAPI<Position[]>(`/api/portfolio/${id}/positions`),
-  risk: (id: string) =>
-    fetchAPI<RiskMetrics>(`/api/portfolio/${id}/risk`),
-  rebalance: (id: string) =>
-    fetchAPI<{ message: string }>(`/api/portfolio/${id}/rebalance`, {
+  overview: () => fetchAPI<PortfolioOverview>('/api/portfolio'),
+  positions: () => fetchAPI<Position[]>('/api/portfolio/positions'),
+  risk: () => fetchAPI<RiskMetrics>('/api/portfolio/risk'),
+  performance: () => fetchAPI<PerformanceMetrics>('/api/portfolio/performance'),
+  allocation: () => fetchAPI<AllocationBreakdown>('/api/portfolio/allocation'),
+  rebalance: () =>
+    fetchAPI<Record<string, any>>('/api/portfolio/rebalance', {
       method: 'POST',
     }),
-  history: (id: string, params?: Record<string, string>) => {
-    const qs = params ? `?${new URLSearchParams(params)}` : '';
-    return fetchAPI<{ date: string; value: number }[]>(
-      `/api/portfolio/${id}/history${qs}`
-    );
-  },
 };
 
 // Trades API
@@ -102,45 +90,50 @@ export const tradesAPI = {
     return fetchAPI<Trade[]>(`/api/trades${qs}`);
   },
   get: (id: string) => fetchAPI<Trade>(`/api/trades/${id}`),
-  create: (data: Partial<Trade>) =>
-    fetchAPI<Trade>('/api/trades', {
+  pending: () => fetchAPI<PendingSummary>('/api/trades/pending'),
+  active: () => fetchAPI<ActiveSummary>('/api/trades/active'),
+  approve: (id: string) =>
+    fetchAPI<Trade>(`/api/trades/${id}/approve`, { method: 'POST' }),
+  reject: (id: string, reason: string) =>
+    fetchAPI<Trade>(`/api/trades/${id}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
+  adjust: (id: string, data: Record<string, any>) =>
+    fetchAPI<Trade>(`/api/trades/${id}/adjust`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
-  approve: (id: string) =>
-    fetchAPI<Trade>(`/api/trades/${id}/approve`, { method: 'POST' }),
-  reject: (id: string) =>
-    fetchAPI<Trade>(`/api/trades/${id}/reject`, { method: 'POST' }),
-  execute: (id: string) =>
-    fetchAPI<Trade>(`/api/trades/${id}/execute`, { method: 'POST' }),
-  close: (id: string) =>
-    fetchAPI<Trade>(`/api/trades/${id}/close`, { method: 'POST' }),
-  cancel: (id: string) =>
-    fetchAPI<Trade>(`/api/trades/${id}/cancel`, { method: 'POST' }),
+  close: (id: string, data?: Record<string, any>) =>
+    fetchAPI<Trade>(`/api/trades/${id}/close`, {
+      method: 'POST',
+      body: data ? JSON.stringify(data) : undefined,
+    }),
 };
 
 // Agents API
 export const agentsAPI = {
-  list: () => fetchAPI<AgentStatus[]>('/api/agents'),
-  get: (name: string) => fetchAPI<AgentStatus>(`/api/agents/${name}`),
-  startLoop: (loopName: string) =>
-    fetchAPI<{ message: string }>(`/api/agents/loops/${loopName}/start`, {
-      method: 'POST',
-    }),
-  stopLoop: (loopName: string) =>
-    fetchAPI<{ message: string }>(`/api/agents/loops/${loopName}/stop`, {
-      method: 'POST',
-    }),
-  loopStatus: () =>
-    fetchAPI<{ idea_loop: string; portfolio_loop: string }>(
-      '/api/agents/loops/status'
-    ),
+  status: () => fetchAPI<AllAgentsStatus>('/api/agents/status'),
   logs: (params?: Record<string, string>) => {
     const qs = params ? `?${new URLSearchParams(params)}` : '';
-    return fetchAPI<
-      { timestamp: string; agent: string; action: string; details: string }[]
-    >(`/api/agents/logs${qs}`);
+    return fetchAPI<AgentLogEntry[]>(`/api/agents/logs${qs}`);
   },
+  startIdeaLoop: () =>
+    fetchAPI<LoopControlResponse>('/api/agents/idea-loop/start', {
+      method: 'POST',
+    }),
+  stopIdeaLoop: () =>
+    fetchAPI<LoopControlResponse>('/api/agents/idea-loop/stop', {
+      method: 'POST',
+    }),
+  startPortfolioLoop: () =>
+    fetchAPI<LoopControlResponse>('/api/agents/portfolio-loop/start', {
+      method: 'POST',
+    }),
+  stopPortfolioLoop: () =>
+    fetchAPI<LoopControlResponse>('/api/agents/portfolio-loop/stop', {
+      method: 'POST',
+    }),
 };
 
 // Knowledge API
@@ -150,67 +143,23 @@ export const knowledgeAPI = {
     return fetchAPI<KnowledgeEntry[]>(`/api/knowledge${qs}`);
   },
   get: (id: string) => fetchAPI<KnowledgeEntry>(`/api/knowledge/${id}`),
-  create: (data: Partial<KnowledgeEntry>) =>
+  create: (data: Record<string, any>) =>
     fetchAPI<KnowledgeEntry>('/api/knowledge', {
       method: 'POST',
       body: JSON.stringify(data),
     }),
-  update: (id: string, data: Partial<KnowledgeEntry>) =>
-    fetchAPI<KnowledgeEntry>(`/api/knowledge/${id}`, {
+  outlook: () => fetchAPI<MarketOutlook>('/api/knowledge/outlook'),
+  updateOutlook: (layer: string, data: Record<string, any>) =>
+    fetchAPI<Record<string, any>>(`/api/knowledge/outlook/${layer}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
-  delete: (id: string) =>
-    fetchAPI<void>(`/api/knowledge/${id}`, { method: 'DELETE' }),
-  outlook: () => fetchAPI<MarketOutlook[]>('/api/knowledge/outlook'),
-  updateOutlook: (data: Partial<MarketOutlook>) =>
-    fetchAPI<MarketOutlook>('/api/knowledge/outlook', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
-  sources: () =>
-    fetchAPI<{ source: string; credibility: number; count: number }[]>(
-      '/api/knowledge/sources'
-    ),
+  sources: () => fetchAPI<SourceCredibility[]>('/api/knowledge/sources'),
+  education: () => fetchAPI<EducationalContent[]>('/api/knowledge/education'),
   triggerPipeline: () =>
-    fetchAPI<{ message: string }>('/api/knowledge/pipeline/trigger', {
+    fetchAPI<Record<string, any>>('/api/knowledge/data-pipeline/trigger', {
       method: 'POST',
     }),
-  pipelineStatus: () =>
-    fetchAPI<{
-      status: string;
-      last_run: string;
-      entries_processed: number;
-    }>('/api/knowledge/pipeline/status'),
-};
-
-// RL Training API
-export const rlAPI = {
-  stats: () => fetchAPI<RLStats[]>('/api/rl/stats'),
-  agentStats: (agentName: string) =>
-    fetchAPI<RLStats>(`/api/rl/stats/${agentName}`),
-  startTraining: (agentName: string, config?: Record<string, any>) =>
-    fetchAPI<{ message: string }>(`/api/rl/train/${agentName}`, {
-      method: 'POST',
-      body: JSON.stringify(config || {}),
-    }),
-  stopTraining: (agentName: string) =>
-    fetchAPI<{ message: string }>(`/api/rl/train/${agentName}/stop`, {
-      method: 'POST',
-    }),
-  episodes: (agentName: string, params?: Record<string, string>) => {
-    const qs = params ? `?${new URLSearchParams(params)}` : '';
-    return fetchAPI<
-      { episode: number; reward: number; steps: number; timestamp: string }[]
-    >(`/api/rl/episodes/${agentName}${qs}`);
-  },
-  replayBufferStats: () =>
-    fetchAPI<{
-      size: number;
-      capacity: number;
-      avg_reward: number;
-      sample_distribution: Record<string, number>;
-    }>('/api/rl/replay-buffer/stats'),
 };
 
 // Alerts API
@@ -220,7 +169,30 @@ export const alertsAPI = {
     return fetchAPI<Alert[]>(`/api/alerts${qs}`);
   },
   dismiss: (id: string) =>
-    fetchAPI<void>(`/api/alerts/${id}/dismiss`, { method: 'POST' }),
+    fetchAPI<Record<string, any>>(`/api/alerts/${id}/dismiss`, {
+      method: 'POST',
+    }),
   dismissAll: () =>
-    fetchAPI<void>('/api/alerts/dismiss-all', { method: 'POST' }),
+    fetchAPI<Record<string, any>>('/api/alerts/dismiss-all', {
+      method: 'POST',
+    }),
+};
+
+// RL Training API
+export const rlAPI = {
+  stats: () => fetchAPI<AgentRLStats[]>('/api/rl/stats'),
+  agentStats: (agentName: string) =>
+    fetchAPI<AgentRLStats>(`/api/rl/stats/${agentName}`),
+  episodes: (agentName: string) =>
+    fetchAPI<RLEpisode[]>(`/api/rl/episodes/${agentName}`),
+  replayBufferStats: () =>
+    fetchAPI<ReplayBufferStats>('/api/rl/replay-buffer/stats'),
+  startTraining: (agentName: string) =>
+    fetchAPI<Record<string, any>>(`/api/rl/train/${agentName}`, {
+      method: 'POST',
+    }),
+  stopTraining: (agentName: string) =>
+    fetchAPI<Record<string, any>>(`/api/rl/train/${agentName}/stop`, {
+      method: 'POST',
+    }),
 };

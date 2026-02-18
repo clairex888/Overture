@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routes import ideas, portfolio, agents, knowledge, trades
+from src.api.routes import ideas, portfolio, agents, knowledge, trades, alerts, rl
 from src.api.websocket import router as ws_router
 from src.config import settings
 from src.models import base as db_base
@@ -36,6 +36,8 @@ app.include_router(portfolio.router, prefix="/api/portfolio", tags=["portfolio"]
 app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
 app.include_router(knowledge.router, prefix="/api/knowledge", tags=["knowledge"])
 app.include_router(trades.router, prefix="/api/trades", tags=["trades"])
+app.include_router(alerts.router, prefix="/api/alerts", tags=["alerts"])
+app.include_router(rl.router, prefix="/api/rl", tags=["rl"])
 
 # WebSocket
 app.include_router(ws_router, prefix="/ws", tags=["websocket"])

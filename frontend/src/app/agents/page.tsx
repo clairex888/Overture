@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Bot,
   Play,
@@ -14,130 +14,12 @@ import {
   CheckCircle2,
   AlertCircle,
   XCircle,
-  Search,
+  Loader2,
 } from 'lucide-react';
+import { agentsAPI } from '@/lib/api';
+import type { AgentStatusEntry, AgentLogEntry } from '@/types';
 
-// --- Mock Data ---
-
-const ideaLoopStages = [
-  { id: 'generate', label: 'Generate', description: 'Scanning sources for ideas', status: 'running' as const, agent: 'Idea Generator' },
-  { id: 'validate', label: 'Validate', description: 'Multi-factor validation', status: 'running' as const, agent: 'Idea Validator' },
-  { id: 'execute', label: 'Execute', description: 'Awaiting trade approval', status: 'idle' as const, agent: 'Trade Executor' },
-  { id: 'monitor', label: 'Monitor', description: 'Tracking open positions', status: 'running' as const, agent: 'Position Monitor' },
-];
-
-const portfolioLoopStages = [
-  { id: 'assess', label: 'Assess', description: 'Evaluating portfolio state', status: 'running' as const, agent: 'Portfolio Manager' },
-  { id: 'construct', label: 'Construct', description: 'Optimizing allocations', status: 'idle' as const, agent: 'Portfolio Constructor' },
-  { id: 'risk_monitor', label: 'Risk Monitor', description: 'Computing VaR & exposures', status: 'running' as const, agent: 'Risk Monitor' },
-  { id: 'rebalance', label: 'Rebalance', description: 'Last rebalance 2h ago', status: 'idle' as const, agent: 'Rebalancer' },
-];
-
-const agentCards = [
-  {
-    name: 'Idea Generator',
-    type: 'Idea Loop',
-    status: 'running' as const,
-    lastAction: 'Scanning news sources for AI infrastructure investment signals',
-    lastActionAt: '2 min ago',
-    tasksCompleted: 847,
-    tasksFailed: 12,
-    uptime: '99.2%',
-  },
-  {
-    name: 'Idea Validator',
-    type: 'Idea Loop',
-    status: 'running' as const,
-    lastAction: 'Running multi-factor validation on NVDA long thesis',
-    lastActionAt: '45 sec ago',
-    tasksCompleted: 623,
-    tasksFailed: 8,
-    uptime: '99.7%',
-  },
-  {
-    name: 'Knowledge Curator',
-    type: 'Idea Loop',
-    status: 'running' as const,
-    lastAction: 'Processing Fed FOMC minutes and updating macro outlook',
-    lastActionAt: '3 min ago',
-    tasksCompleted: 2150,
-    tasksFailed: 21,
-    uptime: '98.9%',
-  },
-  {
-    name: 'Trade Executor',
-    type: 'Idea Loop',
-    status: 'idle' as const,
-    lastAction: 'Awaiting trade approval for NVDA order (PT-001)',
-    lastActionAt: '10 min ago',
-    tasksCompleted: 312,
-    tasksFailed: 5,
-    uptime: '99.5%',
-  },
-  {
-    name: 'Portfolio Manager',
-    type: 'Portfolio Loop',
-    status: 'running' as const,
-    lastAction: 'Rebalancing sector weights after GOOG earnings beat',
-    lastActionAt: '5 min ago',
-    tasksCompleted: 1204,
-    tasksFailed: 3,
-    uptime: '99.9%',
-  },
-  {
-    name: 'Risk Monitor',
-    type: 'Portfolio Loop',
-    status: 'running' as const,
-    lastAction: 'Computing Value-at-Risk with updated correlation matrix',
-    lastActionAt: '1 min ago',
-    tasksCompleted: 5621,
-    tasksFailed: 0,
-    uptime: '100%',
-  },
-  {
-    name: 'Rebalancer',
-    type: 'Portfolio Loop',
-    status: 'idle' as const,
-    lastAction: 'Completed sector rebalance: reduced Tech by 3%, added Energy 2%',
-    lastActionAt: '2 hr ago',
-    tasksCompleted: 89,
-    tasksFailed: 1,
-    uptime: '99.8%',
-  },
-  {
-    name: 'RL Trainer',
-    type: 'Training',
-    status: 'error' as const,
-    lastAction: 'Training interrupted: GPU memory exceeded during batch 4,521',
-    lastActionAt: '15 min ago',
-    tasksCompleted: 4520,
-    tasksFailed: 42,
-    uptime: '94.1%',
-  },
-];
-
-const activityLog = [
-  { time: '17:12:45', agent: 'Risk Monitor', action: 'VaR updated: $18,250 (95% 1-day). Portfolio within risk limits.', level: 'info' as const },
-  { time: '17:12:30', agent: 'Idea Generator', action: 'New idea generated: Long AMD on MI300X shipment ramp. Confidence: 0.74.', level: 'info' as const },
-  { time: '17:11:58', agent: 'Idea Validator', action: 'Validation complete for NVDA long thesis. Score: 0.87. Recommended for execution.', level: 'success' as const },
-  { time: '17:11:15', agent: 'Trade Executor', action: 'Trade PT-001 (Long NVDA 500 shares) submitted for manual approval.', level: 'warning' as const },
-  { time: '17:10:42', agent: 'Knowledge Curator', action: 'Ingested 12 new data points from FOMC meeting minutes.', level: 'info' as const },
-  { time: '17:09:30', agent: 'Portfolio Manager', action: 'Sector exposure check: Technology at 42%, exceeding 35% threshold.', level: 'warning' as const },
-  { time: '17:08:55', agent: 'Risk Monitor', action: 'Correlation matrix updated with latest 30-day rolling window.', level: 'info' as const },
-  { time: '17:07:20', agent: 'Idea Generator', action: 'Scanning Reuters, Bloomberg, SEC filings for new investment signals.', level: 'info' as const },
-  { time: '17:06:45', agent: 'RL Trainer', action: 'Error: CUDA out of memory during episode 4,521. Batch size too large.', level: 'error' as const },
-  { time: '17:05:30', agent: 'Rebalancer', action: 'Rebalance skipped: no drift exceeds threshold (current max drift: 1.2%).', level: 'info' as const },
-  { time: '17:04:15', agent: 'Idea Validator', action: 'Started multi-factor validation on KRE short thesis.', level: 'info' as const },
-  { time: '17:03:00', agent: 'Risk Monitor', action: 'Stress test complete: portfolio survives 2008-style scenario with -12.4% drawdown.', level: 'success' as const },
-  { time: '17:02:30', agent: 'Knowledge Curator', action: 'Updated credibility scores for 8 news sources based on recent accuracy.', level: 'info' as const },
-  { time: '17:01:45', agent: 'Trade Executor', action: 'Trailing stop updated for SPY position: new stop at $505.20.', level: 'info' as const },
-  { time: '17:00:30', agent: 'Portfolio Manager', action: 'Daily portfolio assessment started. NAV: $1,247,832.', level: 'info' as const },
-  { time: '16:58:15', agent: 'Idea Generator', action: 'Completed scan of 847 news articles. 3 potential signals identified.', level: 'success' as const },
-  { time: '16:55:00', agent: 'Risk Monitor', action: 'Greeks update: portfolio delta 0.72, gamma 0.03, vega exposure $4,200.', level: 'info' as const },
-  { time: '16:52:30', agent: 'Rebalancer', action: 'Completed sector rebalance: reduced Tech by 3%, added Energy 2%, Commodities 1%.', level: 'success' as const },
-  { time: '16:50:00', agent: 'Knowledge Curator', action: 'Long-term outlook updated: Equities bullish (72% confidence).', level: 'info' as const },
-  { time: '16:48:20', agent: 'Idea Validator', action: 'Rejected thesis: Short TLT. Fundamental score too low (0.52).', level: 'warning' as const },
-];
+// --- Static config ---
 
 const statusColors: Record<string, { dot: string; text: string; bg: string }> = {
   running: { dot: 'bg-profit', text: 'text-profit', bg: 'bg-profit-muted' },
@@ -159,15 +41,226 @@ const logLevelIcons: Record<string, typeof Activity> = {
   error: XCircle,
 };
 
+// --- Loop stage definitions ---
+
+const ideaLoopStageDefinitions = [
+  { id: 'generate', label: 'Generate', description: 'Scanning sources for ideas', agentNames: ['idea_generator'] },
+  { id: 'validate', label: 'Validate', description: 'Multi-factor validation', agentNames: ['idea_validator'] },
+  { id: 'execute', label: 'Execute', description: 'Awaiting trade approval', agentNames: ['trade_executor'] },
+  { id: 'monitor', label: 'Monitor', description: 'Tracking open positions', agentNames: ['position_monitor'] },
+];
+
+const portfolioLoopStageDefinitions = [
+  { id: 'assess', label: 'Assess', description: 'Evaluating portfolio state', agentNames: ['portfolio_manager'] },
+  { id: 'construct', label: 'Construct', description: 'Optimizing allocations', agentNames: ['portfolio_constructor'] },
+  { id: 'risk_monitor', label: 'Risk Monitor', description: 'Computing VaR & exposures', agentNames: ['risk_monitor'] },
+  { id: 'rebalance', label: 'Rebalance', description: 'Rebalancing portfolio', agentNames: ['rebalancer'] },
+];
+
+// --- Helpers ---
+
+function mapLogStatus(status: string): string {
+  switch (status) {
+    case 'completed':
+      return 'success';
+    case 'failed':
+      return 'error';
+    case 'started':
+      return 'info';
+    case 'skipped':
+      return 'warning';
+    default:
+      return 'info';
+  }
+}
+
+function formatUptime(uptimeSeconds: number): string {
+  if (uptimeSeconds <= 0) return '0%';
+  // Approximate uptime percentage assuming the agent has been expected to run
+  // for the total elapsed time since deployment. For display we compute as
+  // a ratio: if uptime > 24h treat it as near-100%.
+  const hours = uptimeSeconds / 3600;
+  if (hours >= 24) return '99.9%';
+  if (hours >= 12) return '99.5%';
+  if (hours >= 1) return '98%';
+  return `${Math.min(100, (uptimeSeconds / 3600) * 100).toFixed(1)}%`;
+}
+
+function formatTimestamp(timestamp: string): string {
+  try {
+    const d = new Date(timestamp);
+    return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch {
+    return timestamp;
+  }
+}
+
+function getAgentType(agentName: string): string {
+  const ideaAgents = ['idea_generator', 'idea_validator', 'trade_executor', 'position_monitor', 'knowledge_curator'];
+  const portfolioAgents = ['portfolio_manager', 'portfolio_constructor', 'risk_monitor', 'rebalancer'];
+  if (ideaAgents.includes(agentName)) return 'Idea Loop';
+  if (portfolioAgents.includes(agentName)) return 'Portfolio Loop';
+  return 'Training';
+}
+
+function formatLastRun(lastRun: string | null): string {
+  if (!lastRun) return 'Never';
+  try {
+    const d = new Date(lastRun);
+    const now = new Date();
+    const diffMs = now.getTime() - d.getTime();
+    const diffSec = Math.floor(diffMs / 1000);
+    if (diffSec < 60) return `${diffSec} sec ago`;
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `${diffMin} min ago`;
+    const diffHr = Math.floor(diffMin / 60);
+    return `${diffHr} hr ago`;
+  } catch {
+    return lastRun;
+  }
+}
+
+function resolveStageStatus(
+  stageAgentNames: string[],
+  agents: AgentStatusEntry[]
+): 'running' | 'idle' | 'error' {
+  const matched = agents.filter((a) => stageAgentNames.includes(a.name));
+  if (matched.length === 0) return 'idle';
+  if (matched.some((a) => a.status === 'error')) return 'error';
+  if (matched.some((a) => a.status === 'running')) return 'running';
+  return 'idle';
+}
+
+function resolveStageAgent(
+  stageAgentNames: string[],
+  agents: AgentStatusEntry[]
+): string {
+  const matched = agents.find((a) => stageAgentNames.includes(a.name));
+  return matched?.display_name ?? stageAgentNames[0];
+}
+
+// --- Component ---
+
 export default function AgentsPage() {
-  const [ideaLoopRunning, setIdeaLoopRunning] = useState(true);
-  const [portfolioLoopRunning, setPortfolioLoopRunning] = useState(true);
+  const [agents, setAgents] = useState<AgentStatusEntry[]>([]);
+  const [logs, setLogs] = useState<AgentLogEntry[]>([]);
+  const [ideaLoopRunning, setIdeaLoopRunning] = useState(false);
+  const [portfolioLoopRunning, setPortfolioLoopRunning] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loopActionLoading, setLoopActionLoading] = useState<string | null>(null);
   const [logFilter, setLogFilter] = useState('all');
+
+  const fetchStatus = useCallback(async () => {
+    try {
+      const status = await agentsAPI.status();
+      setAgents(status.agents);
+      setIdeaLoopRunning(status.idea_loop_running);
+      setPortfolioLoopRunning(status.portfolio_loop_running);
+    } catch (err) {
+      console.error('Failed to fetch agent status:', err);
+    }
+  }, []);
+
+  const fetchLogs = useCallback(async () => {
+    try {
+      const logEntries = await agentsAPI.logs();
+      setLogs(logEntries);
+    } catch (err) {
+      console.error('Failed to fetch agent logs:', err);
+    }
+  }, []);
+
+  const fetchAll = useCallback(async () => {
+    setLoading(true);
+    await Promise.all([fetchStatus(), fetchLogs()]);
+    setLoading(false);
+  }, [fetchStatus, fetchLogs]);
+
+  useEffect(() => {
+    fetchAll();
+  }, [fetchAll]);
+
+  const handleIdeaLoopToggle = async () => {
+    setLoopActionLoading('idea');
+    try {
+      if (ideaLoopRunning) {
+        await agentsAPI.stopIdeaLoop();
+      } else {
+        await agentsAPI.startIdeaLoop();
+      }
+      await fetchStatus();
+    } catch (err) {
+      console.error('Failed to toggle idea loop:', err);
+    } finally {
+      setLoopActionLoading(null);
+    }
+  };
+
+  const handlePortfolioLoopToggle = async () => {
+    setLoopActionLoading('portfolio');
+    try {
+      if (portfolioLoopRunning) {
+        await agentsAPI.stopPortfolioLoop();
+      } else {
+        await agentsAPI.startPortfolioLoop();
+      }
+      await fetchStatus();
+    } catch (err) {
+      console.error('Failed to toggle portfolio loop:', err);
+    } finally {
+      setLoopActionLoading(null);
+    }
+  };
+
+  // Build loop stages from live agent statuses
+  const ideaLoopStages = ideaLoopStageDefinitions.map((def) => ({
+    ...def,
+    status: resolveStageStatus(def.agentNames, agents),
+    agent: resolveStageAgent(def.agentNames, agents),
+  }));
+
+  const portfolioLoopStages = portfolioLoopStageDefinitions.map((def) => ({
+    ...def,
+    status: resolveStageStatus(def.agentNames, agents),
+    agent: resolveStageAgent(def.agentNames, agents),
+  }));
+
+  // Map agent entries to card data
+  const agentCards = agents.map((agent) => ({
+    name: agent.display_name,
+    agentName: agent.name,
+    type: getAgentType(agent.name),
+    status: (agent.status === 'running' || agent.status === 'idle' || agent.status === 'error'
+      ? agent.status
+      : 'idle') as 'running' | 'idle' | 'error',
+    lastAction: agent.current_task || 'No current task',
+    lastActionAt: formatLastRun(agent.last_run),
+    tasksCompleted: agent.run_count,
+    tasksFailed: agent.error_count,
+    uptime: formatUptime(agent.uptime_seconds),
+  }));
+
+  // Map log entries to display format
+  const activityLog = logs.map((entry) => ({
+    time: formatTimestamp(entry.timestamp),
+    agent: entry.agent_name,
+    action: entry.action,
+    level: mapLogStatus(entry.status) as 'info' | 'success' | 'warning' | 'error',
+  }));
 
   const filteredLog =
     logFilter === 'all'
       ? activityLog
       : activityLog.filter((l) => l.level === logFilter);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <Loader2 className="w-8 h-8 text-accent animate-spin" />
+        <span className="ml-3 text-text-muted">Loading agent data...</span>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -180,6 +273,13 @@ export default function AgentsPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <button
+            onClick={fetchAll}
+            className="p-2 rounded-lg bg-dark-700 border border-white/[0.08] hover:bg-dark-600 transition-colors"
+            title="Refresh all data"
+          >
+            <RefreshCw className="w-4 h-4 text-text-muted" />
+          </button>
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-dark-700 border border-white/[0.08]">
             <div className="w-2 h-2 rounded-full bg-profit animate-pulse-slow" />
             <span className="text-xs text-text-secondary">
@@ -199,14 +299,19 @@ export default function AgentsPage() {
               Idea Loop
             </h3>
             <button
-              onClick={() => setIdeaLoopRunning(!ideaLoopRunning)}
+              onClick={handleIdeaLoopToggle}
+              disabled={loopActionLoading === 'idea'}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                 ideaLoopRunning
                   ? 'bg-loss/20 text-loss-light border border-loss/30 hover:bg-loss/30'
                   : 'bg-profit/20 text-profit-light border border-profit/30 hover:bg-profit/30'
-              }`}
+              } ${loopActionLoading === 'idea' ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
-              {ideaLoopRunning ? (
+              {loopActionLoading === 'idea' ? (
+                <>
+                  <Loader2 className="w-3 h-3 animate-spin" /> ...
+                </>
+              ) : ideaLoopRunning ? (
                 <>
                   <Square className="w-3 h-3" /> Stop
                 </>
@@ -224,7 +329,7 @@ export default function AgentsPage() {
                   <div className="flex items-center gap-2 mb-1.5">
                     <div
                       className={`w-2 h-2 rounded-full ${
-                        statusColors[stage.status].dot
+                        statusColors[stage.status]?.dot ?? statusColors.idle.dot
                       } ${stage.status === 'running' ? 'animate-pulse-slow' : ''}`}
                     />
                     <span className="text-xs font-medium text-text-primary">{stage.label}</span>
@@ -248,14 +353,19 @@ export default function AgentsPage() {
               Portfolio Loop
             </h3>
             <button
-              onClick={() => setPortfolioLoopRunning(!portfolioLoopRunning)}
+              onClick={handlePortfolioLoopToggle}
+              disabled={loopActionLoading === 'portfolio'}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                 portfolioLoopRunning
                   ? 'bg-loss/20 text-loss-light border border-loss/30 hover:bg-loss/30'
                   : 'bg-profit/20 text-profit-light border border-profit/30 hover:bg-profit/30'
-              }`}
+              } ${loopActionLoading === 'portfolio' ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
-              {portfolioLoopRunning ? (
+              {loopActionLoading === 'portfolio' ? (
+                <>
+                  <Loader2 className="w-3 h-3 animate-spin" /> ...
+                </>
+              ) : portfolioLoopRunning ? (
                 <>
                   <Square className="w-3 h-3" /> Stop
                 </>
@@ -273,7 +383,7 @@ export default function AgentsPage() {
                   <div className="flex items-center gap-2 mb-1.5">
                     <div
                       className={`w-2 h-2 rounded-full ${
-                        statusColors[stage.status].dot
+                        statusColors[stage.status]?.dot ?? statusColors.idle.dot
                       } ${stage.status === 'running' ? 'animate-pulse-slow' : ''}`}
                     />
                     <span className="text-xs font-medium text-text-primary">{stage.label}</span>
@@ -295,9 +405,9 @@ export default function AgentsPage() {
         <h3 className="text-sm font-semibold text-text-primary mb-3">Agent Status</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {agentCards.map((agent) => {
-            const colors = statusColors[agent.status];
+            const colors = statusColors[agent.status] ?? statusColors.idle;
             return (
-              <div key={agent.name} className="card hover:border-white/[0.15] transition-colors">
+              <div key={agent.agentName} className="card hover:border-white/[0.15] transition-colors">
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
                     <Bot className="w-4 h-4 text-accent" />
@@ -358,30 +468,39 @@ export default function AgentsPage() {
                 </button>
               ))}
             </div>
-            <button className="p-1.5 rounded-lg bg-dark-500 hover:bg-dark-400 transition-colors">
+            <button
+              onClick={fetchLogs}
+              className="p-1.5 rounded-lg bg-dark-500 hover:bg-dark-400 transition-colors"
+            >
               <RefreshCw className="w-3.5 h-3.5 text-text-muted" />
             </button>
           </div>
         </div>
         <div className="space-y-1 max-h-[500px] overflow-y-auto">
-          {filteredLog.map((entry, idx) => {
-            const LogIcon = logLevelIcons[entry.level];
-            return (
-              <div
-                key={idx}
-                className="flex items-start gap-3 p-2.5 rounded-lg hover:bg-dark-800 transition-colors"
-              >
-                <LogIcon className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${logLevelColors[entry.level]}`} />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-mono text-text-muted">{entry.time}</span>
-                    <span className="text-xs font-medium text-accent">{entry.agent}</span>
+          {filteredLog.length === 0 ? (
+            <div className="text-center py-8 text-text-muted text-sm">
+              No log entries found.
+            </div>
+          ) : (
+            filteredLog.map((entry, idx) => {
+              const LogIcon = logLevelIcons[entry.level] ?? Activity;
+              return (
+                <div
+                  key={idx}
+                  className="flex items-start gap-3 p-2.5 rounded-lg hover:bg-dark-800 transition-colors"
+                >
+                  <LogIcon className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${logLevelColors[entry.level] ?? logLevelColors.info}`} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-mono text-text-muted">{entry.time}</span>
+                      <span className="text-xs font-medium text-accent">{entry.agent}</span>
+                    </div>
+                    <p className="text-xs text-text-secondary mt-0.5">{entry.action}</p>
                   </div>
-                  <p className="text-xs text-text-secondary mt-0.5">{entry.action}</p>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })
+          )}
         </div>
       </div>
     </div>

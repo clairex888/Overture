@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import {
   DollarSign,
   TrendingUp,
@@ -7,13 +8,24 @@ import {
   ArrowLeftRight,
   Shield,
   Bot,
+  Loader2,
 } from 'lucide-react';
 import StatCard from '@/components/dashboard/StatCard';
 import AlertFeed from '@/components/dashboard/AlertFeed';
 import PortfolioChart from '@/components/charts/PortfolioChart';
-import type { Alert, AgentStatus, Idea } from '@/types';
+import { alertsAPI, agentsAPI, ideasAPI, portfolioAPI, tradesAPI } from '@/lib/api';
+import type {
+  Alert,
+  Idea,
+  PortfolioOverview,
+  AllAgentsStatus,
+  AgentStatusEntry,
+  PendingSummary,
+  ActiveSummary,
+  RiskMetrics,
+} from '@/types';
 
-// --- Mock Data ---
+// --- Mock portfolio history (no history endpoint yet) ---
 
 const portfolioHistory = [
   { date: 'Jan 1', value: 10000000 },
@@ -36,191 +48,10 @@ const portfolioHistory = [
   { date: 'Apr 30', value: 11580000 },
 ];
 
-const mockAlerts: Alert[] = [
-  {
-    id: '1',
-    type: 'trade',
-    level: 'critical',
-    title: 'Trade Pending Approval',
-    message: 'Long NVDA 500 shares @ $875.20 requires manual approval before execution.',
-    action_required: true,
-    action_url: '/trades',
-    created_at: new Date(Date.now() - 5 * 60000).toISOString(),
-  },
-  {
-    id: '2',
-    type: 'risk',
-    level: 'warning',
-    title: 'Concentration Risk',
-    message: 'Technology sector exposure at 42%, exceeding 35% threshold.',
-    action_required: true,
-    action_url: '/portfolio',
-    created_at: new Date(Date.now() - 32 * 60000).toISOString(),
-  },
-  {
-    id: '3',
-    type: 'idea',
-    level: 'info',
-    title: 'New Idea Validated',
-    message: 'Short thesis on regional banks validated with 0.82 confidence score.',
-    action_required: false,
-    created_at: new Date(Date.now() - 2 * 3600000).toISOString(),
-  },
-  {
-    id: '4',
-    type: 'system',
-    level: 'info',
-    title: 'Knowledge Base Updated',
-    message: 'Ingested 47 new data points from Fed minutes and earnings reports.',
-    action_required: false,
-    created_at: new Date(Date.now() - 4 * 3600000).toISOString(),
-  },
-  {
-    id: '5',
-    type: 'trade',
-    level: 'warning',
-    title: 'Stop Loss Approaching',
-    message: 'TSLA short position approaching stop loss at $265.00 (current: $258.40).',
-    action_required: false,
-    created_at: new Date(Date.now() - 6 * 3600000).toISOString(),
-  },
-];
-
-const mockAgents: AgentStatus[] = [
-  {
-    name: 'Idea Generator',
-    type: 'idea_loop',
-    status: 'running',
-    last_action: 'Scanning news sources for investment opportunities',
-    last_action_at: new Date(Date.now() - 120000).toISOString(),
-    tasks_completed: 847,
-    tasks_failed: 12,
-  },
-  {
-    name: 'Idea Validator',
-    type: 'idea_loop',
-    status: 'running',
-    last_action: 'Running multi-factor validation on NVDA long thesis',
-    last_action_at: new Date(Date.now() - 45000).toISOString(),
-    tasks_completed: 623,
-    tasks_failed: 8,
-  },
-  {
-    name: 'Portfolio Manager',
-    type: 'portfolio_loop',
-    status: 'running',
-    last_action: 'Rebalancing sector weights after GOOG earnings',
-    last_action_at: new Date(Date.now() - 300000).toISOString(),
-    tasks_completed: 1204,
-    tasks_failed: 3,
-  },
-  {
-    name: 'Risk Monitor',
-    type: 'portfolio_loop',
-    status: 'running',
-    last_action: 'Computing Value-at-Risk with updated correlations',
-    last_action_at: new Date(Date.now() - 60000).toISOString(),
-    tasks_completed: 5621,
-    tasks_failed: 0,
-  },
-  {
-    name: 'Trade Executor',
-    type: 'portfolio_loop',
-    status: 'idle',
-    last_action: 'Awaiting trade approval for NVDA order',
-    last_action_at: new Date(Date.now() - 600000).toISOString(),
-    tasks_completed: 312,
-    tasks_failed: 5,
-  },
-  {
-    name: 'Knowledge Curator',
-    type: 'idea_loop',
-    status: 'running',
-    last_action: 'Processing Fed FOMC minutes from latest meeting',
-    last_action_at: new Date(Date.now() - 180000).toISOString(),
-    tasks_completed: 2150,
-    tasks_failed: 21,
-  },
-];
-
-const mockIdeas: Idea[] = [
-  {
-    id: '1',
-    title: 'Long NVDA on AI Capex Cycle',
-    description: 'NVIDIA positioned to benefit from accelerating AI infrastructure spending',
-    source: 'agent',
-    asset_class: 'equity',
-    tickers: ['NVDA'],
-    thesis: 'Hyperscaler capex guidance indicates 40%+ YoY growth in AI infrastructure. NVDA maintains 80%+ GPU market share.',
-    status: 'validated',
-    confidence_score: 0.87,
-    expected_return: 0.18,
-    risk_level: 'medium',
-    timeframe: 'medium_term',
-    created_at: new Date(Date.now() - 2 * 3600000).toISOString(),
-    updated_at: new Date(Date.now() - 1 * 3600000).toISOString(),
-  },
-  {
-    id: '2',
-    title: 'Short Regional Banks (KRE)',
-    description: 'Commercial real estate exposure creating downside risk for regional banks',
-    source: 'news',
-    asset_class: 'etf',
-    tickers: ['KRE'],
-    thesis: 'CRE loan maturity wall approaching with 30%+ of regional bank loans in commercial real estate.',
-    status: 'validating',
-    confidence_score: 0.72,
-    expected_return: 0.12,
-    risk_level: 'high',
-    timeframe: 'short_term',
-    created_at: new Date(Date.now() - 5 * 3600000).toISOString(),
-    updated_at: new Date(Date.now() - 3 * 3600000).toISOString(),
-  },
-  {
-    id: '3',
-    title: 'Long Gold (GLD) on Rate Cut Cycle',
-    description: 'Gold likely to benefit from expected Fed rate cuts and geopolitical uncertainty',
-    source: 'agent',
-    asset_class: 'commodity',
-    tickers: ['GLD', 'GDX'],
-    thesis: 'Historical correlation between rate cuts and gold prices. Central bank buying at record levels.',
-    status: 'executing',
-    confidence_score: 0.81,
-    expected_return: 0.15,
-    risk_level: 'low',
-    timeframe: 'long_term',
-    created_at: new Date(Date.now() - 24 * 3600000).toISOString(),
-    updated_at: new Date(Date.now() - 12 * 3600000).toISOString(),
-  },
-  {
-    id: '4',
-    title: 'Pairs Trade: MSFT Long / ORCL Short',
-    description: 'Cloud market share divergence creating relative value opportunity',
-    source: 'screen',
-    asset_class: 'equity',
-    tickers: ['MSFT', 'ORCL'],
-    thesis: 'Azure growing 29% vs OCI growing 12%. Valuation gap not reflecting growth differential.',
-    status: 'generated',
-    confidence_score: 0.65,
-    expected_return: 0.08,
-    risk_level: 'medium',
-    timeframe: 'medium_term',
-    created_at: new Date(Date.now() - 1 * 3600000).toISOString(),
-    updated_at: new Date(Date.now() - 1 * 3600000).toISOString(),
-  },
-];
-
 const statusColors: Record<string, string> = {
   running: 'bg-profit',
   idle: 'bg-warning',
   error: 'bg-loss',
-};
-
-const riskLevelColors: Record<string, string> = {
-  low: 'text-profit bg-profit-muted',
-  medium: 'text-warning bg-warning-muted',
-  high: 'text-loss bg-loss-muted',
-  extreme: 'text-loss-light bg-loss-muted',
 };
 
 const ideaStatusColors: Record<string, string> = {
@@ -234,6 +65,111 @@ const ideaStatusColors: Record<string, string> = {
 };
 
 export default function Dashboard() {
+  const [loading, setLoading] = useState(true);
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [agentsStatus, setAgentsStatus] = useState<AllAgentsStatus | null>(null);
+  const [ideas, setIdeas] = useState<Idea[]>([]);
+  const [overview, setOverview] = useState<PortfolioOverview | null>(null);
+  const [pendingTrades, setPendingTrades] = useState<PendingSummary | null>(null);
+  const [activeTrades, setActiveTrades] = useState<ActiveSummary | null>(null);
+  const [riskMetrics, setRiskMetrics] = useState<RiskMetrics | null>(null);
+
+  useEffect(() => {
+    async function fetchData() {
+      try {
+        const [
+          alertsData,
+          agentsData,
+          ideasData,
+          overviewData,
+          pendingData,
+          activeData,
+          riskData,
+        ] = await Promise.all([
+          alertsAPI.list().catch(() => [] as Alert[]),
+          agentsAPI.status().catch(() => null),
+          ideasAPI.list().catch(() => [] as Idea[]),
+          portfolioAPI.overview().catch(() => null),
+          tradesAPI.pending().catch(() => null),
+          tradesAPI.active().catch(() => null),
+          portfolioAPI.risk().catch(() => null),
+        ]);
+
+        setAlerts(alertsData);
+        setAgentsStatus(agentsData);
+        setIdeas(ideasData);
+        setOverview(overviewData);
+        setPendingTrades(pendingData);
+        setActiveTrades(activeData);
+        setRiskMetrics(riskData);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchData();
+  }, []);
+
+  const agents: AgentStatusEntry[] = agentsStatus?.agents ?? [];
+  const activeAgentCount = agents.filter((a) => a.status === 'running').length;
+  const totalAgentCount = agents.length;
+
+  const portfolioValue = overview
+    ? `$${(overview.total_value / 1e6).toFixed(2)}M`
+    : '--';
+  const totalPnl = overview
+    ? `+$${(overview.total_pnl / 1e3).toFixed(1)}K`
+    : '--';
+  const totalPnlPct = overview ? overview.total_pnl_pct : undefined;
+  const dayPnlPct = overview ? overview.day_pnl_pct : undefined;
+
+  const ideasCount = ideas.length;
+  const validatingCount = ideas.filter((i) => i.status === 'validating').length;
+
+  const activeTradesCount = activeTrades?.count ?? 0;
+  const pendingTradesCount = pendingTrades?.count ?? 0;
+
+  const riskScore = riskMetrics
+    ? `${((riskMetrics.portfolio_volatility * 10) / 0.25).toFixed(1)}/10`
+    : '--';
+  const riskLabel = riskMetrics
+    ? riskMetrics.portfolio_volatility < 0.15
+      ? 'low'
+      : riskMetrics.portfolio_volatility < 0.25
+        ? 'moderate'
+        : 'high'
+    : '';
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        {/* Page Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-text-primary">Dashboard</h1>
+            <p className="text-sm text-text-muted mt-1">
+              Real-time overview of your AI hedge fund operations
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-dark-700 border border-white/[0.08]">
+              <div className="w-2 h-2 rounded-full bg-profit animate-pulse-slow" />
+              <span className="text-xs text-text-secondary">Live</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Loading indicator */}
+        <div className="flex items-center justify-center py-32">
+          <div className="flex flex-col items-center gap-3">
+            <Loader2 className="w-8 h-8 text-info animate-spin" />
+            <span className="text-sm text-text-muted">Loading dashboard data...</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Page Header */}
@@ -256,38 +192,38 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard
           title="Portfolio Value"
-          value="$11.58M"
-          change={15.8}
+          value={portfolioValue}
+          change={totalPnlPct}
           subtitle="since inception"
           icon={DollarSign}
           variant="info"
         />
         <StatCard
           title="Total P&L"
-          value="+$1.58M"
-          change={2.34}
+          value={totalPnl}
+          change={dayPnlPct}
           subtitle="this month"
           icon={TrendingUp}
           variant="profit"
         />
         <StatCard
           title="Active Ideas"
-          value="12"
-          subtitle="4 validating"
+          value={String(ideasCount)}
+          subtitle={`${validatingCount} validating`}
           icon={Lightbulb}
           variant="warning"
         />
         <StatCard
           title="Open Trades"
-          value="8"
-          subtitle="1 pending approval"
+          value={String(activeTradesCount)}
+          subtitle={`${pendingTradesCount} pending approval`}
           icon={ArrowLeftRight}
           variant="info"
         />
         <StatCard
           title="Risk Score"
-          value="6.2/10"
-          subtitle="moderate"
+          value={riskScore}
+          subtitle={riskLabel}
           icon={Shield}
           variant="warning"
         />
@@ -321,7 +257,7 @@ export default function Dashboard() {
 
         {/* Alerts */}
         <div className="lg:col-span-1">
-          <AlertFeed alerts={mockAlerts} maxItems={5} />
+          <AlertFeed alerts={alerts} maxItems={5} />
         </div>
       </div>
 
@@ -335,36 +271,36 @@ export default function Dashboard() {
               Agent Status
             </h3>
             <span className="text-xs text-profit font-medium">
-              5/6 Active
+              {activeAgentCount}/{totalAgentCount} Active
             </span>
           </div>
           <div className="space-y-2">
-            {mockAgents.map((agent) => (
+            {agents.map((agent) => (
               <div
                 key={agent.name}
                 className="flex items-center gap-3 p-2.5 rounded-lg bg-dark-800 hover:bg-dark-750 transition-colors"
               >
                 <div
                   className={`w-2 h-2 rounded-full ${
-                    statusColors[agent.status]
+                    statusColors[agent.status] || 'bg-warning'
                   } ${agent.status === 'running' ? 'animate-pulse-slow' : ''}`}
                 />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-medium text-text-primary">
-                      {agent.name}
+                      {agent.display_name}
                     </span>
                     <span className="text-[10px] text-text-muted capitalize">
                       {agent.status}
                     </span>
                   </div>
                   <p className="text-[11px] text-text-muted truncate mt-0.5">
-                    {agent.last_action}
+                    {agent.current_task || 'No active task'}
                   </p>
                 </div>
                 <div className="text-right shrink-0">
                   <span className="text-[10px] text-text-muted">
-                    {agent.tasks_completed} done
+                    {agent.run_count} done
                   </span>
                 </div>
               </div>
@@ -387,7 +323,7 @@ export default function Dashboard() {
             </a>
           </div>
           <div className="space-y-2">
-            {mockIdeas.map((idea) => (
+            {ideas.slice(0, 4).map((idea) => (
               <div
                 key={idea.id}
                 className="p-3 rounded-lg bg-dark-800 hover:bg-dark-750 transition-colors cursor-pointer"
@@ -403,7 +339,7 @@ export default function Dashboard() {
                   </div>
                   <span
                     className={`status-badge ${
-                      ideaStatusColors[idea.status]
+                      ideaStatusColors[idea.status] || 'text-text-secondary bg-dark-500'
                     } shrink-0`}
                   >
                     {idea.status}
@@ -413,22 +349,15 @@ export default function Dashboard() {
                   <div className="flex gap-1">
                     {idea.tickers.map((t) => (
                       <span
-                        key={t}
+                        key={t.symbol}
                         className="px-1.5 py-0.5 rounded bg-dark-500 text-[10px] font-mono text-text-secondary"
                       >
-                        {t}
+                        {t.symbol}
                       </span>
                     ))}
                   </div>
                   <span className="text-[10px] text-text-muted">
-                    Confidence: {(idea.confidence_score * 100).toFixed(0)}%
-                  </span>
-                  <span
-                    className={`text-[10px] px-1.5 py-0.5 rounded ${
-                      riskLevelColors[idea.risk_level]
-                    }`}
-                  >
-                    {idea.risk_level}
+                    Conviction: {(idea.conviction * 100).toFixed(0)}%
                   </span>
                 </div>
               </div>

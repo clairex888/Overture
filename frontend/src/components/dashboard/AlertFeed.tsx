@@ -8,7 +8,13 @@ interface AlertFeedProps {
   maxItems?: number;
 }
 
-const levelConfig = {
+const levelConfig: Record<string, {
+  icon: typeof Info;
+  bg: string;
+  border: string;
+  iconColor: string;
+  dot: string;
+}> = {
   info: {
     icon: Info,
     bg: 'bg-info-muted',

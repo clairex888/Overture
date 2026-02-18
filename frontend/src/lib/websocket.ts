@@ -161,11 +161,30 @@ class WebSocketClient {
 // Singleton instance
 export const wsClient = new WebSocketClient();
 
-// React hook helper
-export function useWebSocket(channel: string, callback: MessageHandler) {
-  if (typeof window !== 'undefined') {
-    // This is a simple helper - in a real app, use useEffect in the component
-    return wsClient.subscribe(channel, callback);
-  }
-  return () => {};
+// React hook - must be used inside useEffect in a component
+export function useWebSocket(
+  channel: string,
+  callback: MessageHandler,
+  deps: any[] = []
+) {
+  // This hook should be called from a useEffect wrapper in components:
+  //
+  // useEffect(() => {
+  //   wsClient.connect(['agents', 'trades']);
+  //   const unsub = wsClient.subscribe('agents', (data) => { ... });
+  //   return () => { unsub(); };
+  // }, []);
+  //
+  return wsClient.subscribe(channel, callback);
+}
+
+// Auto-connect helper for app-level initialization
+export function initWebSocket() {
+  if (typeof window === 'undefined') return;
+  wsClient.connect(['agents', 'trades', 'portfolio', 'ideas', 'alerts']);
+}
+
+// Cleanup helper
+export function cleanupWebSocket() {
+  wsClient.disconnect();
 }

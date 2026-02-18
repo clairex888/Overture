@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Brain,
   Play,
@@ -18,6 +18,7 @@ import {
   XCircle,
   AlertCircle,
   Lightbulb,
+  Loader2,
 } from 'lucide-react';
 import {
   LineChart,
@@ -29,155 +30,8 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-
-// --- Mock Data ---
-
-const agentTrainingStats = [
-  {
-    name: 'Idea Generator',
-    totalEpisodes: 4520,
-    avgReward: 0.72,
-    bestReward: 1.84,
-    worstReward: -0.93,
-    status: 'training' as const,
-    learningRate: 0.0003,
-    epsilon: 0.15,
-    lastUpdated: '2025-04-20T16:45:00Z',
-  },
-  {
-    name: 'Trade Executor',
-    totalEpisodes: 3890,
-    avgReward: 0.58,
-    bestReward: 2.12,
-    worstReward: -1.45,
-    status: 'paused' as const,
-    learningRate: 0.0001,
-    epsilon: 0.10,
-    lastUpdated: '2025-04-20T15:30:00Z',
-  },
-  {
-    name: 'Portfolio Manager',
-    totalEpisodes: 6210,
-    avgReward: 0.85,
-    bestReward: 1.96,
-    worstReward: -0.67,
-    status: 'training' as const,
-    learningRate: 0.0002,
-    epsilon: 0.08,
-    lastUpdated: '2025-04-20T17:00:00Z',
-  },
-  {
-    name: 'Risk Monitor',
-    totalEpisodes: 5100,
-    avgReward: 0.91,
-    bestReward: 1.52,
-    worstReward: -0.32,
-    status: 'converged' as const,
-    learningRate: 0.00005,
-    epsilon: 0.03,
-    lastUpdated: '2025-04-20T12:00:00Z',
-  },
-];
-
-// Reward history data for line chart
-const rewardHistory = Array.from({ length: 50 }, (_, i) => {
-  const episode = (i + 1) * 100;
-  return {
-    episode,
-    'Idea Generator': parseFloat((0.1 + Math.log(i + 1) * 0.18 + (Math.random() - 0.5) * 0.15).toFixed(3)),
-    'Trade Executor': parseFloat((-0.2 + Math.log(i + 1) * 0.15 + (Math.random() - 0.5) * 0.2).toFixed(3)),
-    'Portfolio Manager': parseFloat((0.15 + Math.log(i + 1) * 0.2 + (Math.random() - 0.5) * 0.12).toFixed(3)),
-  };
-});
-
-const replayBufferStats = {
-  bufferSize: 128450,
-  capacity: 256000,
-  avgReward: 0.64,
-  minReward: -2.31,
-  maxReward: 2.85,
-  oldestExperience: '2025-04-15T08:00:00Z',
-  newestExperience: '2025-04-20T17:10:00Z',
-  samplesPerSecond: 1240,
-};
-
-const trainingInsights = [
-  {
-    agent: 'Idea Generator',
-    insight: 'Buy-the-dip strategies after >3 sigma moves show 78% win rate over 2,100 episodes. Increasing allocation to mean-reversion patterns.',
-    type: 'pattern' as const,
-    timestamp: '2025-04-20T17:05:00Z',
-  },
-  {
-    agent: 'Portfolio Manager',
-    insight: 'Sector concentration penalty (HHI > 0.15) consistently leads to -0.3 reward. Agent learned to cap individual sector at 30%.',
-    type: 'learning' as const,
-    timestamp: '2025-04-20T16:48:00Z',
-  },
-  {
-    agent: 'Trade Executor',
-    insight: 'Trailing stop at 2x ATR outperforms fixed stops by 23% in backtested episodes. Adapting stop-loss strategy.',
-    type: 'optimization' as const,
-    timestamp: '2025-04-20T16:30:00Z',
-  },
-  {
-    agent: 'Risk Monitor',
-    insight: 'Converged on optimal VaR threshold of 2.5% NAV. Further training shows diminishing returns. Recommending deployment.',
-    type: 'convergence' as const,
-    timestamp: '2025-04-20T15:15:00Z',
-  },
-  {
-    agent: 'Idea Generator',
-    insight: 'News sentiment combined with options flow data improved idea quality score by 15%. Adding flow data as permanent feature.',
-    type: 'feature' as const,
-    timestamp: '2025-04-20T14:40:00Z',
-  },
-  {
-    agent: 'Portfolio Manager',
-    insight: 'Risk parity weighting outperforms equal weight by 0.12 Sharpe points across 1,000 episode moving average.',
-    type: 'learning' as const,
-    timestamp: '2025-04-20T13:20:00Z',
-  },
-  {
-    agent: 'Trade Executor',
-    insight: 'Limit orders at bid/ask midpoint fill rate: 64%. Agent learning to adjust aggressiveness based on spread width.',
-    type: 'optimization' as const,
-    timestamp: '2025-04-20T12:50:00Z',
-  },
-  {
-    agent: 'Idea Generator',
-    insight: 'Earnings surprise > 10% creates 3-day momentum in 71% of cases. Developing post-earnings entry timing strategy.',
-    type: 'pattern' as const,
-    timestamp: '2025-04-20T11:30:00Z',
-  },
-  {
-    agent: 'Risk Monitor',
-    insight: 'Cross-asset correlation spikes during high-VIX regimes. Agent now dynamically adjusts hedging during volatility events.',
-    type: 'learning' as const,
-    timestamp: '2025-04-20T10:15:00Z',
-  },
-  {
-    agent: 'Portfolio Manager',
-    insight: 'Rebalancing frequency of weekly outperforms daily by 0.08 Sharpe after accounting for transaction costs.',
-    type: 'optimization' as const,
-    timestamp: '2025-04-20T09:00:00Z',
-  },
-];
-
-const episodeHistory = [
-  { id: 'EP-4520', agent: 'Idea Generator', steps: 342, totalReward: 1.24, outcome: 'Profitable', duration: '4m 12s' },
-  { id: 'EP-4519', agent: 'Idea Generator', steps: 289, totalReward: -0.31, outcome: 'Loss', duration: '3m 45s' },
-  { id: 'EP-6210', agent: 'Portfolio Manager', steps: 518, totalReward: 1.67, outcome: 'Profitable', duration: '6m 22s' },
-  { id: 'EP-6209', agent: 'Portfolio Manager', steps: 445, totalReward: 0.92, outcome: 'Profitable', duration: '5m 38s' },
-  { id: 'EP-3890', agent: 'Trade Executor', steps: 156, totalReward: -0.85, outcome: 'Loss', duration: '2m 03s' },
-  { id: 'EP-3889', agent: 'Trade Executor', steps: 234, totalReward: 1.45, outcome: 'Profitable', duration: '3m 11s' },
-  { id: 'EP-5100', agent: 'Risk Monitor', steps: 612, totalReward: 1.12, outcome: 'Profitable', duration: '7m 45s' },
-  { id: 'EP-5099', agent: 'Risk Monitor', steps: 580, totalReward: 0.88, outcome: 'Profitable', duration: '7m 12s' },
-  { id: 'EP-4518', agent: 'Idea Generator', steps: 310, totalReward: 0.56, outcome: 'Profitable', duration: '3m 58s' },
-  { id: 'EP-6208', agent: 'Portfolio Manager', steps: 490, totalReward: -0.22, outcome: 'Loss', duration: '5m 55s' },
-  { id: 'EP-3888', agent: 'Trade Executor', steps: 198, totalReward: 0.73, outcome: 'Profitable', duration: '2m 41s' },
-  { id: 'EP-5098', agent: 'Risk Monitor', steps: 595, totalReward: 1.05, outcome: 'Profitable', duration: '7m 30s' },
-];
+import { rlAPI } from '@/lib/api';
+import type { AgentRLStats, RLEpisode, ReplayBufferStats } from '@/types';
 
 const statusColors: Record<string, { dot: string; text: string; bg: string; label: string }> = {
   training: { dot: 'bg-profit', text: 'text-profit', bg: 'bg-profit-muted', label: 'Training' },
@@ -186,27 +40,18 @@ const statusColors: Record<string, { dot: string; text: string; bg: string; labe
   error: { dot: 'bg-loss', text: 'text-loss', bg: 'bg-loss-muted', label: 'Error' },
 };
 
-const insightTypeColors: Record<string, string> = {
-  pattern: 'text-info bg-info-muted',
-  learning: 'text-profit bg-profit-muted',
-  optimization: 'text-warning bg-warning-muted',
-  convergence: 'text-accent bg-accent-muted',
-  feature: 'text-info bg-info-muted',
-};
-
-const insightTypeIcons: Record<string, typeof Lightbulb> = {
-  pattern: BarChart3,
-  learning: Brain,
-  optimization: Zap,
-  convergence: CheckCircle2,
-  feature: Cpu,
-};
-
 const agentLineColors: Record<string, string> = {
   'Idea Generator': '#3b82f6',
   'Trade Executor': '#f59e0b',
   'Portfolio Manager': '#00d084',
+  'Risk Monitor': '#a855f7',
 };
+
+function formatDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return `${m}m ${s.toString().padStart(2, '0')}s`;
+}
 
 function CustomChartTooltip({ active, payload, label }: any) {
   if (!active || !payload || !payload.length) return null;
@@ -228,13 +73,113 @@ function CustomChartTooltip({ active, payload, label }: any) {
 
 export default function RLTrainingPage() {
   const [selectedAgent, setSelectedAgent] = useState<string>('all');
+  const [agentStats, setAgentStats] = useState<AgentRLStats[]>([]);
+  const [episodes, setEpisodes] = useState<RLEpisode[]>([]);
+  const [replayBuffer, setReplayBuffer] = useState<ReplayBufferStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [startingTraining, setStartingTraining] = useState(false);
+
+  useEffect(() => {
+    async function fetchData() {
+      try {
+        setLoading(true);
+        setError(null);
+
+        const [stats, bufferStats] = await Promise.all([
+          rlAPI.stats(),
+          rlAPI.replayBufferStats(),
+        ]);
+
+        setAgentStats(stats);
+        setReplayBuffer(bufferStats);
+
+        // Fetch episodes for each agent and combine
+        const episodeResults = await Promise.all(
+          stats.map((s) => rlAPI.episodes(s.agent_name))
+        );
+        const allEpisodes = episodeResults
+          .flat()
+          .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        setEpisodes(allEpisodes);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to fetch RL data');
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchData();
+  }, []);
+
+  const handleStartAllTraining = async () => {
+    try {
+      setStartingTraining(true);
+      await Promise.all(agentStats.map((s) => rlAPI.startTraining(s.agent_name)));
+      // Refresh stats after starting training
+      const stats = await rlAPI.stats();
+      setAgentStats(stats);
+    } catch (err) {
+      console.error('Failed to start training:', err);
+    } finally {
+      setStartingTraining(false);
+    }
+  };
+
+  // Build reward history chart data from agent reward_trend arrays
+  const rewardHistory =
+    agentStats.length > 0 && agentStats[0].reward_trend.length > 0
+      ? agentStats[0].reward_trend.map((_, i) => ({
+          episode: (i + 1) * 100,
+          ...Object.fromEntries(
+            agentStats.map((s) => [s.agent_name, s.reward_trend[i]])
+          ),
+        }))
+      : [];
+
+  // Build training insights from all agents' insights arrays
+  const trainingInsights = agentStats.flatMap((s) =>
+    s.insights.map((insight) => ({
+      agent: s.agent_name,
+      insight,
+    }))
+  );
 
   const filteredEpisodes =
     selectedAgent === 'all'
-      ? episodeHistory
-      : episodeHistory.filter((e) => e.agent === selectedAgent);
+      ? episodes
+      : episodes.filter((e) => e.agent_name === selectedAgent);
 
-  const capacityPct = ((replayBufferStats.bufferSize / replayBufferStats.capacity) * 100).toFixed(1);
+  const capacityPct =
+    replayBuffer ? ((replayBuffer.size / replayBuffer.capacity) * 100).toFixed(1) : '0';
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="flex items-center gap-3 text-text-muted">
+          <Loader2 className="w-5 h-5 animate-spin" />
+          <span className="text-sm">Loading RL training data...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="flex flex-col items-center gap-3 text-text-muted">
+          <AlertCircle className="w-8 h-8 text-loss" />
+          <span className="text-sm">{error}</span>
+          <button
+            onClick={() => window.location.reload()}
+            className="btn-secondary text-xs"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -251,8 +196,16 @@ export default function RLTrainingPage() {
             <RefreshCw className="w-4 h-4" />
             Reset Buffers
           </button>
-          <button className="btn-primary flex items-center gap-2">
-            <Play className="w-4 h-4" />
+          <button
+            className="btn-primary flex items-center gap-2"
+            onClick={handleStartAllTraining}
+            disabled={startingTraining}
+          >
+            {startingTraining ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Play className="w-4 h-4" />
+            )}
             Start All Training
           </button>
         </div>
@@ -260,14 +213,14 @@ export default function RLTrainingPage() {
 
       {/* Agent Training Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {agentTrainingStats.map((agent) => {
-          const colors = statusColors[agent.status];
+        {agentStats.map((agent) => {
+          const colors = statusColors[agent.status] || statusColors.error;
           return (
-            <div key={agent.name} className="card hover:border-white/[0.15] transition-colors">
+            <div key={agent.agent_name} className="card hover:border-white/[0.15] transition-colors">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <Brain className="w-4 h-4 text-accent" />
-                  <span className="text-xs font-semibold text-text-primary">{agent.name}</span>
+                  <span className="text-xs font-semibold text-text-primary">{agent.agent_name}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <div className={`w-2 h-2 rounded-full ${colors.dot} ${agent.status === 'training' ? 'animate-pulse-slow' : ''}`} />
@@ -278,26 +231,26 @@ export default function RLTrainingPage() {
               <div className="grid grid-cols-2 gap-3 mb-3">
                 <div>
                   <span className="text-[10px] text-text-muted block">Total Episodes</span>
-                  <span className="text-sm font-bold text-text-primary font-mono">{agent.totalEpisodes.toLocaleString()}</span>
+                  <span className="text-sm font-bold text-text-primary font-mono">{agent.total_episodes.toLocaleString()}</span>
                 </div>
                 <div>
                   <span className="text-[10px] text-text-muted block">Avg Reward</span>
-                  <span className={`text-sm font-bold font-mono ${agent.avgReward >= 0 ? 'text-profit' : 'text-loss'}`}>
-                    {agent.avgReward >= 0 ? '+' : ''}{agent.avgReward.toFixed(2)}
+                  <span className={`text-sm font-bold font-mono ${agent.avg_reward >= 0 ? 'text-profit' : 'text-loss'}`}>
+                    {agent.avg_reward >= 0 ? '+' : ''}{agent.avg_reward.toFixed(2)}
                   </span>
                 </div>
                 <div>
                   <span className="text-[10px] text-text-muted block">Best Reward</span>
-                  <span className="text-sm font-bold font-mono text-profit">+{agent.bestReward.toFixed(2)}</span>
+                  <span className="text-sm font-bold font-mono text-profit">+{agent.best_episode_reward.toFixed(2)}</span>
                 </div>
                 <div>
                   <span className="text-[10px] text-text-muted block">Worst Reward</span>
-                  <span className="text-sm font-bold font-mono text-loss">{agent.worstReward.toFixed(2)}</span>
+                  <span className="text-sm font-bold font-mono text-loss">{agent.worst_episode_reward.toFixed(2)}</span>
                 </div>
               </div>
 
               <div className="pt-2 border-t border-white/[0.05] flex items-center justify-between text-[10px] text-text-muted">
-                <span>LR: {agent.learningRate}</span>
+                <span>LR: {agent.learning_rate}</span>
                 <span>Eps: {agent.epsilon}</span>
               </div>
             </div>
@@ -313,12 +266,15 @@ export default function RLTrainingPage() {
             Reward History
           </h3>
           <div className="flex items-center gap-3 text-[11px]">
-            {Object.entries(agentLineColors).map(([name, color]) => (
-              <div key={name} className="flex items-center gap-1.5">
-                <div className="w-3 h-0.5 rounded-full" style={{ backgroundColor: color }} />
-                <span className="text-text-muted">{name}</span>
-              </div>
-            ))}
+            {agentStats.map((s) => {
+              const color = agentLineColors[s.agent_name] || '#888';
+              return (
+                <div key={s.agent_name} className="flex items-center gap-1.5">
+                  <div className="w-3 h-0.5 rounded-full" style={{ backgroundColor: color }} />
+                  <span className="text-text-muted">{s.agent_name}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
         <ResponsiveContainer width="100%" height={320}>
@@ -339,30 +295,17 @@ export default function RLTrainingPage() {
               width={50}
             />
             <Tooltip content={<CustomChartTooltip />} />
-            <Line
-              type="monotone"
-              dataKey="Idea Generator"
-              stroke="#3b82f6"
-              strokeWidth={2}
-              dot={false}
-              animationDuration={1000}
-            />
-            <Line
-              type="monotone"
-              dataKey="Trade Executor"
-              stroke="#f59e0b"
-              strokeWidth={2}
-              dot={false}
-              animationDuration={1000}
-            />
-            <Line
-              type="monotone"
-              dataKey="Portfolio Manager"
-              stroke="#00d084"
-              strokeWidth={2}
-              dot={false}
-              animationDuration={1000}
-            />
+            {agentStats.map((s) => (
+              <Line
+                key={s.agent_name}
+                type="monotone"
+                dataKey={s.agent_name}
+                stroke={agentLineColors[s.agent_name] || '#888'}
+                strokeWidth={2}
+                dot={false}
+                animationDuration={1000}
+              />
+            ))}
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -375,58 +318,49 @@ export default function RLTrainingPage() {
             <Database className="w-4 h-4 text-info" />
             Experience Replay Buffer
           </h3>
-          <div className="space-y-4">
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-xs text-text-muted">Buffer Capacity</span>
-                <span className="text-xs font-mono text-text-primary">{capacityPct}%</span>
+          {replayBuffer && (
+            <div className="space-y-4">
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs text-text-muted">Buffer Capacity</span>
+                  <span className="text-xs font-mono text-text-primary">{capacityPct}%</span>
+                </div>
+                <div className="w-full bg-dark-600 rounded-full h-2">
+                  <div
+                    className="h-2 rounded-full bg-info"
+                    style={{ width: `${capacityPct}%` }}
+                  />
+                </div>
+                <div className="flex items-center justify-between mt-1">
+                  <span className="text-[10px] text-text-muted">
+                    {replayBuffer.size.toLocaleString()} experiences
+                  </span>
+                  <span className="text-[10px] text-text-muted">
+                    {replayBuffer.capacity.toLocaleString()} max
+                  </span>
+                </div>
               </div>
-              <div className="w-full bg-dark-600 rounded-full h-2">
-                <div
-                  className="h-2 rounded-full bg-info"
-                  style={{ width: `${capacityPct}%` }}
-                />
-              </div>
-              <div className="flex items-center justify-between mt-1">
-                <span className="text-[10px] text-text-muted">
-                  {replayBufferStats.bufferSize.toLocaleString()} experiences
-                </span>
-                <span className="text-[10px] text-text-muted">
-                  {replayBufferStats.capacity.toLocaleString()} max
-                </span>
-              </div>
-            </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div className="p-2.5 rounded-lg bg-dark-800">
-                <span className="text-[10px] text-text-muted block">Avg Reward</span>
-                <span className="text-sm font-bold text-profit font-mono">+{replayBufferStats.avgReward.toFixed(2)}</span>
-              </div>
-              <div className="p-2.5 rounded-lg bg-dark-800">
-                <span className="text-[10px] text-text-muted block">Samples/sec</span>
-                <span className="text-sm font-bold text-text-primary font-mono">{replayBufferStats.samplesPerSecond.toLocaleString()}</span>
-              </div>
-              <div className="p-2.5 rounded-lg bg-dark-800">
-                <span className="text-[10px] text-text-muted block">Min Reward</span>
-                <span className="text-sm font-bold text-loss font-mono">{replayBufferStats.minReward.toFixed(2)}</span>
-              </div>
-              <div className="p-2.5 rounded-lg bg-dark-800">
-                <span className="text-[10px] text-text-muted block">Max Reward</span>
-                <span className="text-sm font-bold text-profit font-mono">+{replayBufferStats.maxReward.toFixed(2)}</span>
-              </div>
-            </div>
-
-            <div className="pt-3 border-t border-white/[0.05] text-[11px] text-text-muted space-y-1">
-              <div className="flex justify-between">
-                <span>Oldest Experience</span>
-                <span>{new Date(replayBufferStats.oldestExperience).toLocaleDateString()}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Newest Experience</span>
-                <span>{new Date(replayBufferStats.newestExperience).toLocaleDateString()}</span>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-2.5 rounded-lg bg-dark-800">
+                  <span className="text-[10px] text-text-muted block">Avg Reward</span>
+                  <span className="text-sm font-bold text-profit font-mono">+{replayBuffer.avg_reward.toFixed(2)}</span>
+                </div>
+                <div className="p-2.5 rounded-lg bg-dark-800">
+                  <span className="text-[10px] text-text-muted block">Samples/sec</span>
+                  <span className="text-sm font-bold text-text-primary font-mono">{replayBuffer.samples_per_second.toLocaleString()}</span>
+                </div>
+                <div className="p-2.5 rounded-lg bg-dark-800">
+                  <span className="text-[10px] text-text-muted block">Min Reward</span>
+                  <span className="text-sm font-bold text-loss font-mono">{replayBuffer.min_reward.toFixed(2)}</span>
+                </div>
+                <div className="p-2.5 rounded-lg bg-dark-800">
+                  <span className="text-[10px] text-text-muted block">Max Reward</span>
+                  <span className="text-sm font-bold text-profit font-mono">+{replayBuffer.max_reward.toFixed(2)}</span>
+                </div>
               </div>
             </div>
-          </div>
+          )}
         </div>
 
         {/* Training Insights */}
@@ -436,31 +370,26 @@ export default function RLTrainingPage() {
             Training Insights
           </h3>
           <div className="space-y-2 max-h-[400px] overflow-y-auto">
-            {trainingInsights.map((insight, idx) => {
-              const InsightIcon = insightTypeIcons[insight.type];
-              return (
+            {trainingInsights.length === 0 ? (
+              <p className="text-xs text-text-muted py-4 text-center">No insights available yet.</p>
+            ) : (
+              trainingInsights.map((insight, idx) => (
                 <div
                   key={idx}
                   className="p-3 rounded-lg bg-dark-800 border border-white/[0.05] hover:border-white/[0.1] transition-colors"
                 >
                   <div className="flex items-start gap-3">
-                    <InsightIcon className={`w-4 h-4 mt-0.5 shrink-0 ${insightTypeColors[insight.type].split(' ')[0]}`} />
+                    <Lightbulb className="w-4 h-4 mt-0.5 shrink-0 text-warning" />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
                         <span className="text-xs font-medium text-accent">{insight.agent}</span>
-                        <span className={`status-badge text-[10px] ${insightTypeColors[insight.type]}`}>
-                          {insight.type}
-                        </span>
-                        <span className="text-[10px] text-text-muted ml-auto shrink-0">
-                          {new Date(insight.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
                       </div>
                       <p className="text-xs text-text-secondary leading-relaxed">{insight.insight}</p>
                     </div>
                   </div>
                 </div>
-              );
-            })}
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -473,7 +402,7 @@ export default function RLTrainingPage() {
             Episode History
           </h3>
           <div className="flex items-center gap-1">
-            {['all', ...agentTrainingStats.map((a) => a.name)].map((f) => (
+            {['all', ...agentStats.map((a) => a.agent_name)].map((f) => (
               <button
                 key={f}
                 onClick={() => setSelectedAgent(f)}
@@ -510,11 +439,11 @@ export default function RLTrainingPage() {
                     <span className="text-xs font-mono text-text-primary">{ep.id}</span>
                   </td>
                   <td className="table-cell">
-                    <span className="text-xs text-text-secondary">{ep.agent}</span>
+                    <span className="text-xs text-text-secondary">{ep.agent_name}</span>
                   </td>
                   <td className="table-cell text-right font-mono">{ep.steps}</td>
-                  <td className={`table-cell text-right font-mono font-medium ${ep.totalReward >= 0 ? 'text-profit' : 'text-loss'}`}>
-                    {ep.totalReward >= 0 ? '+' : ''}{ep.totalReward.toFixed(2)}
+                  <td className={`table-cell text-right font-mono font-medium ${ep.total_reward >= 0 ? 'text-profit' : 'text-loss'}`}>
+                    {ep.total_reward >= 0 ? '+' : ''}{ep.total_reward.toFixed(2)}
                   </td>
                   <td className="table-cell text-center">
                     <span
@@ -527,9 +456,18 @@ export default function RLTrainingPage() {
                       {ep.outcome}
                     </span>
                   </td>
-                  <td className="table-cell text-right text-text-muted font-mono text-xs">{ep.duration}</td>
+                  <td className="table-cell text-right text-text-muted font-mono text-xs">
+                    {formatDuration(ep.duration_seconds)}
+                  </td>
                 </tr>
               ))}
+              {filteredEpisodes.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="text-center py-8 text-xs text-text-muted">
+                    No episodes found.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

@@ -1,181 +1,20 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback, Fragment } from 'react';
 import {
   Lightbulb,
   Search,
-  Plus,
   ChevronDown,
   ChevronRight,
-  ExternalLink,
   Zap,
-  Clock,
   Filter,
+  Loader2,
+  AlertCircle,
 } from 'lucide-react';
 import type { Idea } from '@/types';
+import { ideasAPI } from '@/lib/api';
 
-// --- Mock Data ---
-
-const mockIdeas: Idea[] = [
-  {
-    id: '1',
-    title: 'Long NVDA on AI Capex Cycle',
-    description: 'NVIDIA positioned to benefit from accelerating AI infrastructure spending across hyperscalers.',
-    source: 'agent',
-    asset_class: 'equity',
-    tickers: ['NVDA'],
-    thesis: 'Hyperscaler capex guidance indicates 40%+ YoY growth in AI infrastructure. NVDA maintains 80%+ GPU market share with H100/B100 chips. Data center revenue expected to grow 100%+ YoY. Key risk: AMD MI300X adoption and custom silicon from Google/Amazon.',
-    status: 'validated',
-    confidence_score: 0.87,
-    expected_return: 0.18,
-    risk_level: 'medium',
-    timeframe: 'medium_term',
-    validation_results: {
-      fundamental_score: 0.91,
-      technical_score: 0.78,
-      sentiment_score: 0.85,
-      risk_adjusted_return: 0.14,
-    },
-    created_at: '2025-04-20T14:30:00Z',
-    updated_at: '2025-04-20T16:45:00Z',
-  },
-  {
-    id: '2',
-    title: 'Short Regional Banks (KRE)',
-    description: 'Commercial real estate exposure creating downside risk for regional banks.',
-    source: 'news',
-    asset_class: 'etf',
-    tickers: ['KRE'],
-    thesis: 'CRE loan maturity wall approaching with 30%+ of regional bank loans in commercial real estate. Office vacancy rates at record 19.6%. Potential for significant loan loss provisions in coming quarters.',
-    status: 'validating',
-    confidence_score: 0.72,
-    expected_return: 0.12,
-    risk_level: 'high',
-    timeframe: 'short_term',
-    created_at: '2025-04-20T10:00:00Z',
-    updated_at: '2025-04-20T12:30:00Z',
-  },
-  {
-    id: '3',
-    title: 'Long Gold (GLD) on Rate Cut Cycle',
-    description: 'Gold likely to benefit from expected Fed rate cuts and geopolitical uncertainty.',
-    source: 'agent',
-    asset_class: 'commodity',
-    tickers: ['GLD', 'GDX'],
-    thesis: 'Historical correlation between rate cuts and gold prices is strong. Central bank buying at record levels. Geopolitical risk premium likely to persist. Real yields declining as inflation expectations moderate.',
-    status: 'executing',
-    confidence_score: 0.81,
-    expected_return: 0.15,
-    risk_level: 'low',
-    timeframe: 'long_term',
-    validation_results: {
-      fundamental_score: 0.85,
-      technical_score: 0.82,
-      sentiment_score: 0.76,
-      risk_adjusted_return: 0.19,
-    },
-    created_at: '2025-04-19T08:00:00Z',
-    updated_at: '2025-04-20T09:00:00Z',
-  },
-  {
-    id: '4',
-    title: 'Pairs Trade: MSFT Long / ORCL Short',
-    description: 'Cloud market share divergence creating relative value opportunity.',
-    source: 'screen',
-    asset_class: 'equity',
-    tickers: ['MSFT', 'ORCL'],
-    thesis: 'Azure growing 29% vs OCI growing 12%. Valuation gap not reflecting growth differential. MSFT AI integration (Copilot) creating additional growth runway. ORCL overvalued on cloud transition narrative.',
-    status: 'generated',
-    confidence_score: 0.65,
-    expected_return: 0.08,
-    risk_level: 'medium',
-    timeframe: 'medium_term',
-    created_at: '2025-04-20T16:00:00Z',
-    updated_at: '2025-04-20T16:00:00Z',
-  },
-  {
-    id: '5',
-    title: 'Long TSMC on Semiconductor Supercycle',
-    description: 'Taiwan Semiconductor poised to benefit from AI chip demand surge.',
-    source: 'agent',
-    asset_class: 'equity',
-    tickers: ['TSM'],
-    thesis: 'Advanced node (3nm, 2nm) capacity fully booked through 2026. AI accelerator demand driving 20%+ revenue growth. CoWoS advanced packaging is key bottleneck giving TSMC pricing power.',
-    status: 'monitoring',
-    confidence_score: 0.79,
-    expected_return: 0.22,
-    risk_level: 'high',
-    timeframe: 'long_term',
-    validation_results: {
-      fundamental_score: 0.88,
-      technical_score: 0.71,
-      sentiment_score: 0.80,
-      risk_adjusted_return: 0.12,
-    },
-    created_at: '2025-04-15T10:00:00Z',
-    updated_at: '2025-04-20T08:00:00Z',
-  },
-  {
-    id: '6',
-    title: 'Short Treasury Bonds (TLT)',
-    description: 'Fiscal deficit and supply concerns to pressure long-duration Treasuries.',
-    source: 'user',
-    asset_class: 'etf',
-    tickers: ['TLT'],
-    thesis: 'US fiscal deficit projected at $1.9T. Treasury issuance increasing while Fed continues QT. Term premium should rise as market demands higher compensation for duration risk.',
-    status: 'rejected',
-    confidence_score: 0.45,
-    expected_return: 0.06,
-    risk_level: 'high',
-    timeframe: 'medium_term',
-    validation_results: {
-      fundamental_score: 0.52,
-      technical_score: 0.38,
-      sentiment_score: 0.41,
-      risk_adjusted_return: 0.03,
-    },
-    created_at: '2025-04-18T14:00:00Z',
-    updated_at: '2025-04-19T10:00:00Z',
-  },
-  {
-    id: '7',
-    title: 'Long SPY Put Spread for Tail Risk',
-    description: 'Hedging portfolio with SPY put spreads ahead of FOMC and earnings season.',
-    source: 'agent',
-    asset_class: 'equity',
-    tickers: ['SPY'],
-    thesis: 'VIX at historically low levels makes put protection cheap. Concentration risk in mag-7 stocks. Event calendar loaded with FOMC, major earnings, and geopolitical catalysts.',
-    status: 'validated',
-    confidence_score: 0.74,
-    expected_return: -0.02,
-    risk_level: 'low',
-    timeframe: 'short_term',
-    validation_results: {
-      fundamental_score: 0.70,
-      technical_score: 0.80,
-      sentiment_score: 0.68,
-      risk_adjusted_return: 0.08,
-    },
-    created_at: '2025-04-20T11:00:00Z',
-    updated_at: '2025-04-20T14:00:00Z',
-  },
-  {
-    id: '8',
-    title: 'Long Uranium (URA) on Nuclear Renaissance',
-    description: 'Nuclear energy demand surge driven by AI data center power needs.',
-    source: 'news',
-    asset_class: 'etf',
-    tickers: ['URA', 'CCJ'],
-    thesis: 'AI data centers projected to consume 8% of US electricity by 2030. Multiple tech companies signing nuclear PPAs. Uranium spot price trending higher with constrained supply.',
-    status: 'closed',
-    confidence_score: 0.83,
-    expected_return: 0.25,
-    risk_level: 'high',
-    timeframe: 'long_term',
-    created_at: '2025-03-01T10:00:00Z',
-    updated_at: '2025-04-15T16:00:00Z',
-  },
-];
+// --- Constants ---
 
 const pipelineStages = [
   { key: 'generated', label: 'Generated', color: 'bg-dark-400' },
@@ -207,33 +46,83 @@ const statusColors: Record<string, string> = {
   closed: 'text-text-muted bg-dark-400',
 };
 
-const riskColors: Record<string, string> = {
-  low: 'text-profit',
-  medium: 'text-warning',
-  high: 'text-loss',
-  extreme: 'text-loss-light',
-};
-
 const sourceIcons: Record<string, string> = {
-  news: '📰',
-  screen: '📊',
+  human: '👤',
   agent: '🤖',
-  user: '👤',
-  aggregated: '🔗',
 };
 
 export default function IdeasPage() {
+  const [ideas, setIdeas] = useState<Idea[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  const filteredIdeas = mockIdeas.filter((idea) => {
+  const fetchIdeas = useCallback(async () => {
+    try {
+      setError(null);
+      const data = await ideasAPI.list();
+      setIdeas(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to fetch ideas');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchIdeas();
+  }, [fetchIdeas]);
+
+  const handleGenerate = async () => {
+    try {
+      setGenerating(true);
+      setError(null);
+      await ideasAPI.generate();
+      await fetchIdeas();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to generate ideas');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleValidate = async (id: string) => {
+    try {
+      setActionLoading(id);
+      setError(null);
+      await ideasAPI.validate(id);
+      await fetchIdeas();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to validate idea');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleExecute = async (id: string) => {
+    try {
+      setActionLoading(id);
+      setError(null);
+      await ideasAPI.execute(id);
+      await fetchIdeas();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to execute idea');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const filteredIdeas = ideas.filter((idea) => {
     if (filter !== 'all' && idea.status !== filter) return false;
     if (
       searchQuery &&
       !idea.title.toLowerCase().includes(searchQuery.toLowerCase()) &&
       !idea.tickers.some((t) =>
-        t.toLowerCase().includes(searchQuery.toLowerCase())
+        t.symbol.toLowerCase().includes(searchQuery.toLowerCase())
       )
     )
       return false;
@@ -242,8 +131,19 @@ export default function IdeasPage() {
 
   const stageCounts = pipelineStages.map((stage) => ({
     ...stage,
-    count: mockIdeas.filter((i) => i.status === stage.key).length,
+    count: ideas.filter((i) => i.status === stage.key).length,
   }));
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="w-8 h-8 text-info animate-spin" />
+          <p className="text-sm text-text-muted">Loading ideas...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -260,12 +160,34 @@ export default function IdeasPage() {
             <Filter className="w-4 h-4" />
             Advanced Filters
           </button>
-          <button className="btn-primary flex items-center gap-2">
-            <Zap className="w-4 h-4" />
-            Generate Ideas
+          <button
+            className="btn-primary flex items-center gap-2"
+            onClick={handleGenerate}
+            disabled={generating}
+          >
+            {generating ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Zap className="w-4 h-4" />
+            )}
+            {generating ? 'Generating...' : 'Generate Ideas'}
           </button>
         </div>
       </div>
+
+      {/* Error Banner */}
+      {error && (
+        <div className="flex items-center gap-3 p-4 rounded-lg bg-loss/10 border border-loss/20">
+          <AlertCircle className="w-5 h-5 text-loss shrink-0" />
+          <p className="text-sm text-loss">{error}</p>
+          <button
+            onClick={() => setError(null)}
+            className="ml-auto text-xs text-loss hover:text-loss-light"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Pipeline Visualization */}
       <div className="card">
@@ -335,18 +257,15 @@ export default function IdeasPage() {
               <th className="table-header text-left px-4 py-3">Source</th>
               <th className="table-header text-left px-4 py-3">Tickers</th>
               <th className="table-header text-left px-4 py-3">Status</th>
-              <th className="table-header text-right px-4 py-3">Confidence</th>
-              <th className="table-header text-right px-4 py-3">Exp. Return</th>
-              <th className="table-header text-center px-4 py-3">Risk</th>
+              <th className="table-header text-right px-4 py-3">Conviction</th>
               <th className="table-header text-left px-4 py-3">Timeframe</th>
               <th className="table-header text-left px-4 py-3">Created</th>
             </tr>
           </thead>
           <tbody>
             {filteredIdeas.map((idea) => (
-              <>
+              <Fragment key={idea.id}>
                 <tr
-                  key={idea.id}
                   onClick={() =>
                     setExpandedId(expandedId === idea.id ? null : idea.id)
                   }
@@ -366,24 +285,24 @@ export default function IdeasPage() {
                   </td>
                   <td className="table-cell">
                     <span className="text-sm">
-                      {sourceIcons[idea.source]} {idea.source}
+                      {sourceIcons[idea.source] || '📄'} {idea.source}
                     </span>
                   </td>
                   <td className="table-cell">
                     <div className="flex gap-1">
                       {idea.tickers.map((t) => (
                         <span
-                          key={t}
+                          key={t.symbol}
                           className="px-1.5 py-0.5 rounded bg-dark-500 text-xs font-mono text-text-secondary"
                         >
-                          {t}
+                          {t.symbol}
                         </span>
                       ))}
                     </div>
                   </td>
                   <td className="table-cell">
                     <span
-                      className={`status-badge ${statusColors[idea.status]}`}
+                      className={`status-badge ${statusColors[idea.status] || ''}`}
                     >
                       {idea.status}
                     </span>
@@ -391,31 +310,14 @@ export default function IdeasPage() {
                   <td className="table-cell text-right font-mono">
                     <span
                       className={
-                        idea.confidence_score >= 0.7
+                        idea.conviction >= 0.7
                           ? 'text-profit'
-                          : idea.confidence_score >= 0.5
+                          : idea.conviction >= 0.5
                           ? 'text-warning'
                           : 'text-loss'
                       }
                     >
-                      {(idea.confidence_score * 100).toFixed(0)}%
-                    </span>
-                  </td>
-                  <td className="table-cell text-right font-mono">
-                    {idea.expected_return !== undefined && (
-                      <span
-                        className={
-                          idea.expected_return >= 0 ? 'text-profit' : 'text-loss'
-                        }
-                      >
-                        {idea.expected_return >= 0 ? '+' : ''}
-                        {(idea.expected_return * 100).toFixed(1)}%
-                      </span>
-                    )}
-                  </td>
-                  <td className="table-cell text-center">
-                    <span className={`text-xs font-medium ${riskColors[idea.risk_level]}`}>
-                      {idea.risk_level}
+                      {(idea.conviction * 100).toFixed(0)}%
                     </span>
                   </td>
                   <td className="table-cell">
@@ -431,7 +333,7 @@ export default function IdeasPage() {
                 </tr>
                 {expandedId === idea.id && (
                   <tr key={`${idea.id}-detail`} className="border-b border-white/[0.05]">
-                    <td colSpan={10} className="px-4 py-4 bg-dark-800">
+                    <td colSpan={8} className="px-4 py-4 bg-dark-800">
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                         {/* Thesis */}
                         <div>
@@ -441,13 +343,27 @@ export default function IdeasPage() {
                           <p className="text-sm text-text-secondary leading-relaxed">
                             {idea.thesis}
                           </p>
-                          {idea.source_url && (
-                            <a
-                              href={idea.source_url}
-                              className="inline-flex items-center gap-1 text-xs text-info mt-2 hover:text-info-light"
-                            >
-                              Source <ExternalLink className="w-3 h-3" />
-                            </a>
+                          {idea.tags && idea.tags.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-3">
+                              {idea.tags.map((tag) => (
+                                <span
+                                  key={tag}
+                                  className="px-2 py-0.5 rounded-full bg-dark-500 text-[10px] text-text-muted"
+                                >
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {idea.notes && (
+                            <div className="mt-3">
+                              <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-1">
+                                Notes
+                              </h4>
+                              <p className="text-xs text-text-muted leading-relaxed">
+                                {idea.notes}
+                              </p>
+                            </div>
                           )}
                         </div>
 
@@ -456,9 +372,9 @@ export default function IdeasPage() {
                           <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2">
                             Validation Results
                           </h4>
-                          {idea.validation_results ? (
+                          {idea.validation_result ? (
                             <div className="grid grid-cols-2 gap-2">
-                              {Object.entries(idea.validation_results).map(
+                              {Object.entries(idea.validation_result).map(
                                 ([key, value]) => (
                                   <div
                                     key={key}
@@ -483,13 +399,41 @@ export default function IdeasPage() {
                           )}
                           <div className="flex gap-2 mt-3">
                             {idea.status === 'generated' && (
-                              <button className="btn-primary text-xs">
-                                Validate
+                              <button
+                                className="btn-primary text-xs"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleValidate(idea.id);
+                                }}
+                                disabled={actionLoading === idea.id}
+                              >
+                                {actionLoading === idea.id ? (
+                                  <span className="flex items-center gap-1">
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                    Validating...
+                                  </span>
+                                ) : (
+                                  'Validate'
+                                )}
                               </button>
                             )}
                             {idea.status === 'validated' && (
-                              <button className="btn-success text-xs">
-                                Create Trade
+                              <button
+                                className="btn-success text-xs"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleExecute(idea.id);
+                                }}
+                                disabled={actionLoading === idea.id}
+                              >
+                                {actionLoading === idea.id ? (
+                                  <span className="flex items-center gap-1">
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                    Creating...
+                                  </span>
+                                ) : (
+                                  'Create Trade'
+                                )}
                               </button>
                             )}
                           </div>
@@ -498,7 +442,7 @@ export default function IdeasPage() {
                     </td>
                   </tr>
                 )}
-              </>
+              </Fragment>
             ))}
           </tbody>
         </table>

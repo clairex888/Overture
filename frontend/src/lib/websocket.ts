@@ -11,7 +11,11 @@ class WebSocketClient {
   private channels: string[] = [];
 
   constructor() {
-    const wsBase = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
+    const wsBase =
+      process.env.NEXT_PUBLIC_WS_URL ||
+      (process.env.NEXT_PUBLIC_API_URL
+        ? process.env.NEXT_PUBLIC_API_URL.replace(/^http/, 'ws')
+        : 'ws://localhost:8000');
     this.url = `${wsBase}/ws/dashboard`;
   }
 

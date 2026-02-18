@@ -3,13 +3,27 @@ Knowledge API routes.
 
 Manages the knowledge base: market outlook across time horizons, source
 credibility, educational content, and the data ingestion pipeline.
+Core data (entries + outlooks) is persisted in PostgreSQL.
+Sources and education stay in-memory (reference data).
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel, Field
 from typing import Any
 from datetime import datetime
 from uuid import uuid4
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.models.base import get_session
+from src.models.knowledge import (
+    KnowledgeEntry,
+    KnowledgeCategory,
+    KnowledgeLayer,
+    MarketOutlook,
+    OutlookSentiment,
+)
 
 router = APIRouter()
 
@@ -19,7 +33,6 @@ router = APIRouter()
 
 
 class KnowledgeEntryCreate(BaseModel):
-    """Schema for creating a new knowledge entry."""
     title: str = Field(..., min_length=1, max_length=300)
     content: str = Field(..., min_length=1)
     category: str = Field(
@@ -60,7 +73,7 @@ class OutlookLayer(BaseModel):
     last_updated: str
 
 
-class MarketOutlook(BaseModel):
+class MarketOutlookResponse(BaseModel):
     long_term: OutlookLayer
     medium_term: OutlookLayer
     short_term: OutlookLayer
@@ -107,218 +120,93 @@ class DataPipelineResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# In-memory stores (swap for DB later)
+# Mapping helpers
 # ---------------------------------------------------------------------------
 
-_knowledge_store: dict[str, dict[str, Any]] = {}
-
-_outlook_store: dict[str, dict[str, Any]] = {
-    "long_term": {
-        "layer": "long_term",
-        "sentiment": "bullish",
-        "confidence": 0.65,
-        "summary": "Structural AI/tech adoption and easing cycle support multi-year equity growth. Fixed income attractive at current yields.",
-        "key_factors": [
-            "AI productivity revolution",
-            "Global easing cycle underway",
-            "Strong US corporate earnings trajectory",
-            "Demographics shifting in emerging markets",
-        ],
-        "risks": [
-            "Geopolitical fragmentation",
-            "Debt sustainability concerns",
-            "AI regulation overshoot",
-        ],
-        "opportunities": [
-            "AI infrastructure buildout",
-            "Green energy transition",
-            "Emerging market consumption growth",
-        ],
-        "last_updated": "2026-02-12T06:00:00Z",
-    },
-    "medium_term": {
-        "layer": "medium_term",
-        "sentiment": "neutral",
-        "confidence": 0.55,
-        "summary": "Mixed signals: earnings growth solid but valuations stretched. Watching Fed trajectory and geopolitical developments.",
-        "key_factors": [
-            "Fed rate path uncertainty",
-            "Q4 earnings season results",
-            "Geopolitical tensions in multiple regions",
-            "Credit spreads tightening",
-        ],
-        "risks": [
-            "Sticky inflation resurgence",
-            "Liquidity withdrawal acceleration",
-            "Earnings growth deceleration",
-        ],
-        "opportunities": [
-            "Sector rotation into value",
-            "Fixed income duration extension",
-            "Commodity supercycle continuation",
-        ],
-        "last_updated": "2026-02-12T06:00:00Z",
-    },
-    "short_term": {
-        "layer": "short_term",
-        "sentiment": "bearish",
-        "confidence": 0.60,
-        "summary": "Near-term caution warranted. Technical overbought signals, upcoming CPI data, and options expiration could trigger volatility.",
-        "key_factors": [
-            "SPX at technical resistance",
-            "VIX suppressed to extreme lows",
-            "CPI release this week",
-            "Large options expiration Friday",
-        ],
-        "risks": [
-            "CPI upside surprise",
-            "VIX spike from compressed levels",
-            "Crowded positioning unwind",
-        ],
-        "opportunities": [
-            "Volatility selling on spike",
-            "Hedging at low cost",
-            "Crypto momentum continuation",
-        ],
-        "last_updated": "2026-02-12T08:00:00Z",
-    },
+# Map API layer names to DB enum values
+# DB uses "mid_term", API uses "medium_term"
+_LAYER_API_TO_DB = {
+    "long_term": KnowledgeLayer.LONG_TERM,
+    "medium_term": KnowledgeLayer.MID_TERM,
+    "short_term": KnowledgeLayer.SHORT_TERM,
 }
 
-_sources_store: list[dict[str, Any]] = [
-    {
-        "name": "Federal Reserve (FRED)",
-        "type": "official",
-        "credibility_score": 0.98,
-        "accuracy_history": 0.99,
-        "total_entries": 1250,
-        "last_fetched": "2026-02-12T06:00:00Z",
-    },
-    {
-        "name": "Bloomberg API",
-        "type": "api",
-        "credibility_score": 0.95,
-        "accuracy_history": 0.97,
-        "total_entries": 3400,
-        "last_fetched": "2026-02-12T08:00:00Z",
-    },
-    {
-        "name": "Reuters News",
-        "type": "news",
-        "credibility_score": 0.90,
-        "accuracy_history": 0.88,
-        "total_entries": 820,
-        "last_fetched": "2026-02-12T07:30:00Z",
-    },
-    {
-        "name": "CoinGecko",
-        "type": "api",
-        "credibility_score": 0.85,
-        "accuracy_history": 0.90,
-        "total_entries": 560,
-        "last_fetched": "2026-02-12T08:05:00Z",
-    },
-    {
-        "name": "Reddit r/wallstreetbets",
-        "type": "social",
-        "credibility_score": 0.30,
-        "accuracy_history": 0.25,
-        "total_entries": 150,
-        "last_fetched": "2026-02-12T07:00:00Z",
-    },
-    {
-        "name": "Goldman Sachs Research",
-        "type": "research",
-        "credibility_score": 0.88,
-        "accuracy_history": 0.82,
-        "total_entries": 95,
-        "last_fetched": "2026-02-11T18:00:00Z",
-    },
-]
+_LAYER_DB_TO_API = {
+    KnowledgeLayer.LONG_TERM: "long_term",
+    KnowledgeLayer.MID_TERM: "medium_term",
+    KnowledgeLayer.SHORT_TERM: "short_term",
+}
 
-_education_store: list[dict[str, Any]] = [
-    {
-        "id": str(uuid4()),
-        "title": "Understanding Value at Risk (VaR)",
-        "summary": "Comprehensive guide to VaR calculation methods and their application in portfolio risk management.",
-        "category": "risk_management",
-        "difficulty": "intermediate",
-        "relevance_score": 0.92,
-        "url": None,
-        "created_at": "2026-02-10T12:00:00Z",
-    },
-    {
-        "id": str(uuid4()),
-        "title": "Options Greeks Explained",
-        "summary": "Deep dive into Delta, Gamma, Theta, Vega and how they affect options pricing and hedging strategies.",
-        "category": "derivatives",
-        "difficulty": "advanced",
-        "relevance_score": 0.85,
-        "url": None,
-        "created_at": "2026-02-08T09:00:00Z",
-    },
-    {
-        "id": str(uuid4()),
-        "title": "Introduction to Asset Allocation",
-        "summary": "How to build a diversified portfolio across asset classes based on your risk tolerance and time horizon.",
-        "category": "portfolio_management",
-        "difficulty": "beginner",
-        "relevance_score": 0.78,
-        "url": None,
-        "created_at": "2026-02-05T15:00:00Z",
-    },
-]
-
-# Seed a few knowledge entries
-_seed_entries = [
-    {
-        "id": str(uuid4()),
-        "title": "Fed signals patience on rate cuts amid persistent services inflation",
-        "content": "Federal Reserve minutes from January meeting reveal committee members prefer to wait for more data before cutting rates further. Services inflation remains sticky at 3.8% annualized.",
-        "category": "macro",
-        "layer": "medium_term",
-        "asset_class": None,
-        "tickers": [],
-        "source": "reuters",
-        "confidence": 0.92,
-        "tags": ["fed", "rates", "inflation"],
-        "created_at": "2026-02-11T14:00:00Z",
-        "updated_at": "2026-02-11T14:00:00Z",
-    },
-    {
-        "id": str(uuid4()),
-        "title": "NVIDIA earnings beat expectations, guidance strong on AI demand",
-        "content": "NVIDIA reported Q4 earnings of $5.16 per share vs $4.80 expected. Revenue guidance for Q1 2026 at $28B, above consensus of $26.5B. Data center revenue grew 85% YoY.",
-        "category": "fundamental",
-        "layer": "short_term",
-        "asset_class": "equities",
-        "tickers": ["NVDA"],
-        "source": "bloomberg",
-        "confidence": 0.98,
-        "tags": ["earnings", "ai", "semiconductors"],
-        "created_at": "2026-02-10T21:00:00Z",
-        "updated_at": "2026-02-10T21:00:00Z",
-    },
-    {
-        "id": str(uuid4()),
-        "title": "Bitcoin ETF inflows accelerate to record levels",
-        "content": "Spot Bitcoin ETFs saw $2.1B in net inflows last week, the highest since launch. BlackRock's IBIT leads with $890M. Institutional adoption metrics continue to climb.",
-        "category": "sentiment",
-        "layer": "medium_term",
-        "asset_class": "crypto",
-        "tickers": ["BTC-USD"],
-        "source": "coingecko",
-        "confidence": 0.88,
-        "tags": ["bitcoin", "etf", "institutional"],
-        "created_at": "2026-02-09T10:00:00Z",
-        "updated_at": "2026-02-09T10:00:00Z",
-    },
-]
-for entry in _seed_entries:
-    _knowledge_store[entry["id"]] = entry
+# Map API categories to DB enum values
+_CATEGORY_API_TO_DB = {
+    "macro": KnowledgeCategory.MACRO,
+    "fundamental": KnowledgeCategory.FUNDAMENTAL,
+    "technical": KnowledgeCategory.TECHNICAL,
+    "research": KnowledgeCategory.RESEARCH,
+    "event": KnowledgeCategory.EVENT,
+    "education": KnowledgeCategory.EDUCATION,
+    # Extended mappings for API categories without direct DB enum
+    "sector": KnowledgeCategory.RESEARCH,
+    "instrument": KnowledgeCategory.TECHNICAL,
+    "sentiment": KnowledgeCategory.MACRO,
+    "news": KnowledgeCategory.EVENT,
+}
 
 
 def _now_iso() -> str:
     return datetime.utcnow().isoformat() + "Z"
+
+
+def _dt_iso(dt: datetime | None) -> str:
+    if dt is None:
+        return _now_iso()
+    return dt.isoformat() + "Z"
+
+
+def _entry_to_response(entry: KnowledgeEntry) -> KnowledgeEntryResponse:
+    """Convert ORM KnowledgeEntry to API response."""
+    meta = entry.metadata_ or {}
+
+    # Layer mapping: DB uses mid_term, API expects medium_term
+    layer = _LAYER_DB_TO_API.get(entry.layer, entry.layer.value if entry.layer else "medium_term")
+
+    # Category: prefer original API category stored in metadata, fallback to enum value
+    category = meta.get("original_category", entry.category.value if entry.category else "macro")
+
+    return KnowledgeEntryResponse(
+        id=entry.id,
+        title=entry.title,
+        content=entry.content,
+        category=category,
+        layer=layer,
+        asset_class=(entry.asset_classes[0] if entry.asset_classes else None),
+        tickers=entry.tickers or [],
+        source=entry.source or "unknown",
+        confidence=entry.source_credibility_score or 0.7,
+        tags=entry.tags or [],
+        created_at=_dt_iso(entry.created_at),
+        updated_at=_dt_iso(entry.updated_at),
+    )
+
+
+# ---------------------------------------------------------------------------
+# In-memory reference data (no DB model for these)
+# ---------------------------------------------------------------------------
+
+_sources_store: list[dict[str, Any]] = [
+    {"name": "Federal Reserve (FRED)", "type": "official", "credibility_score": 0.98, "accuracy_history": 0.99, "total_entries": 1250, "last_fetched": "2026-02-12T06:00:00Z"},
+    {"name": "Bloomberg API", "type": "api", "credibility_score": 0.95, "accuracy_history": 0.97, "total_entries": 3400, "last_fetched": "2026-02-12T08:00:00Z"},
+    {"name": "Reuters News", "type": "news", "credibility_score": 0.90, "accuracy_history": 0.88, "total_entries": 820, "last_fetched": "2026-02-12T07:30:00Z"},
+    {"name": "CoinGecko", "type": "api", "credibility_score": 0.85, "accuracy_history": 0.90, "total_entries": 560, "last_fetched": "2026-02-12T08:05:00Z"},
+    {"name": "Reddit r/wallstreetbets", "type": "social", "credibility_score": 0.30, "accuracy_history": 0.25, "total_entries": 150, "last_fetched": "2026-02-12T07:00:00Z"},
+    {"name": "Goldman Sachs Research", "type": "research", "credibility_score": 0.88, "accuracy_history": 0.82, "total_entries": 95, "last_fetched": "2026-02-11T18:00:00Z"},
+]
+
+_education_store: list[dict[str, Any]] = [
+    {"id": str(uuid4()), "title": "Understanding Value at Risk (VaR)", "summary": "Comprehensive guide to VaR calculation methods and their application in portfolio risk management.", "category": "risk_management", "difficulty": "intermediate", "relevance_score": 0.92, "url": None, "created_at": "2026-02-10T12:00:00Z"},
+    {"id": str(uuid4()), "title": "Options Greeks Explained", "summary": "Deep dive into Delta, Gamma, Theta, Vega and how they affect options pricing and hedging strategies.", "category": "derivatives", "difficulty": "advanced", "relevance_score": 0.85, "url": None, "created_at": "2026-02-08T09:00:00Z"},
+    {"id": str(uuid4()), "title": "Introduction to Asset Allocation", "summary": "How to build a diversified portfolio across asset classes based on your risk tolerance and time horizon.", "category": "portfolio_management", "difficulty": "beginner", "relevance_score": 0.78, "url": None, "created_at": "2026-02-05T15:00:00Z"},
+]
 
 
 # ---------------------------------------------------------------------------
@@ -332,39 +220,76 @@ async def list_knowledge(
     layer: str | None = Query(None, description="Filter by time layer"),
     asset_class: str | None = Query(None, description="Filter by asset class"),
     limit: int = Query(50, ge=1, le=500),
+    session: AsyncSession = Depends(get_session),
 ):
     """List knowledge entries with optional filters."""
-    results = list(_knowledge_store.values())
+    stmt = select(KnowledgeEntry)
 
     if category:
-        results = [e for e in results if e["category"] == category]
+        cat_enum = _CATEGORY_API_TO_DB.get(category)
+        if cat_enum:
+            stmt = stmt.where(KnowledgeEntry.category == cat_enum)
+
     if layer:
-        results = [e for e in results if e["layer"] == layer]
+        layer_enum = _LAYER_API_TO_DB.get(layer)
+        if layer_enum:
+            stmt = stmt.where(KnowledgeEntry.layer == layer_enum)
+
     if asset_class:
-        results = [e for e in results if e.get("asset_class") == asset_class]
+        # JSON array contains check - use a simple text match
+        stmt = stmt.where(KnowledgeEntry.asset_classes.contains([asset_class]))
 
-    results.sort(key=lambda e: e["created_at"], reverse=True)
-    return [KnowledgeEntryResponse(**e) for e in results[:limit]]
+    stmt = stmt.order_by(KnowledgeEntry.created_at.desc()).limit(limit)
+    result = await session.execute(stmt)
+    entries = result.scalars().all()
+    return [_entry_to_response(e) for e in entries]
 
 
-@router.get("/outlook", response_model=MarketOutlook)
-async def get_market_outlook():
-    """Get market outlook across all time horizon layers (long/mid/short term)."""
-    sentiments = [_outlook_store[l]["sentiment"] for l in ("long_term", "medium_term", "short_term")]
+@router.get("/outlook", response_model=MarketOutlookResponse)
+async def get_market_outlook(session: AsyncSession = Depends(get_session)):
+    """Get market outlook across all time horizon layers."""
+    result = await session.execute(
+        select(MarketOutlook).where(MarketOutlook.asset_class == "general")
+    )
+    outlooks = {o.layer: o for o in result.scalars().all()}
+
+    def _build_layer(layer_enum: KnowledgeLayer, api_name: str) -> OutlookLayer:
+        o = outlooks.get(layer_enum)
+        if o:
+            return OutlookLayer(
+                layer=api_name,
+                sentiment=o.outlook.value if o.outlook else "neutral",
+                confidence=o.confidence or 0.5,
+                summary=o.rationale or "",
+                key_factors=o.key_drivers or [],
+                risks=[],
+                opportunities=[],
+                last_updated=_dt_iso(o.last_updated or o.updated_at),
+            )
+        return OutlookLayer(
+            layer=api_name,
+            sentiment="neutral",
+            confidence=0.5,
+            summary="No outlook data available.",
+            key_factors=[],
+            risks=[],
+            opportunities=[],
+            last_updated=_now_iso(),
+        )
+
+    lt = _build_layer(KnowledgeLayer.LONG_TERM, "long_term")
+    mt = _build_layer(KnowledgeLayer.MID_TERM, "medium_term")
+    st = _build_layer(KnowledgeLayer.SHORT_TERM, "short_term")
+
+    # Compute consensus
     sentiment_scores = {"bullish": 1, "neutral": 0, "bearish": -1}
-    avg_score = sum(sentiment_scores.get(s, 0) for s in sentiments) / len(sentiments)
+    avg = sum(sentiment_scores.get(l.sentiment, 0) for l in [lt, mt, st]) / 3
+    consensus = "bullish" if avg > 0.3 else ("bearish" if avg < -0.3 else "neutral")
 
-    if avg_score > 0.3:
-        consensus = "bullish"
-    elif avg_score < -0.3:
-        consensus = "bearish"
-    else:
-        consensus = "neutral"
-
-    return MarketOutlook(
-        long_term=OutlookLayer(**_outlook_store["long_term"]),
-        medium_term=OutlookLayer(**_outlook_store["medium_term"]),
-        short_term=OutlookLayer(**_outlook_store["short_term"]),
+    return MarketOutlookResponse(
+        long_term=lt,
+        medium_term=mt,
+        short_term=st,
         consensus_sentiment=consensus,
         last_updated=_now_iso(),
     )
@@ -385,41 +310,53 @@ async def get_education():
 
 
 @router.get("/{entry_id}", response_model=KnowledgeEntryResponse)
-async def get_knowledge_entry(entry_id: str):
+async def get_knowledge_entry(
+    entry_id: str,
+    session: AsyncSession = Depends(get_session),
+):
     """Get a single knowledge entry by ID."""
-    entry = _knowledge_store.get(entry_id)
+    result = await session.execute(
+        select(KnowledgeEntry).where(KnowledgeEntry.id == entry_id)
+    )
+    entry = result.scalar_one_or_none()
     if not entry:
         raise HTTPException(status_code=404, detail=f"Knowledge entry {entry_id} not found")
-    return KnowledgeEntryResponse(**entry)
+    return _entry_to_response(entry)
 
 
 @router.post("/", response_model=KnowledgeEntryResponse, status_code=201)
-async def create_knowledge_entry(payload: KnowledgeEntryCreate):
+async def create_knowledge_entry(
+    payload: KnowledgeEntryCreate,
+    session: AsyncSession = Depends(get_session),
+):
     """Add a custom knowledge entry (user contribution to the knowledge base)."""
-    entry_id = str(uuid4())
-    now = _now_iso()
+    layer_enum = _LAYER_API_TO_DB.get(payload.layer, KnowledgeLayer.MID_TERM)
+    cat_enum = _CATEGORY_API_TO_DB.get(payload.category, KnowledgeCategory.MACRO)
 
-    entry: dict[str, Any] = {
-        "id": entry_id,
-        "title": payload.title,
-        "content": payload.content,
-        "category": payload.category,
-        "layer": payload.layer,
-        "asset_class": payload.asset_class,
-        "tickers": payload.tickers,
-        "source": payload.source,
-        "confidence": payload.confidence,
-        "tags": payload.tags,
-        "created_at": now,
-        "updated_at": now,
-    }
-
-    _knowledge_store[entry_id] = entry
-    return KnowledgeEntryResponse(**entry)
+    entry = KnowledgeEntry(
+        id=str(uuid4()),
+        title=payload.title,
+        content=payload.content,
+        category=cat_enum,
+        layer=layer_enum,
+        source=payload.source,
+        source_credibility_score=payload.confidence,
+        tags=payload.tags,
+        asset_classes=[payload.asset_class] if payload.asset_class else [],
+        tickers=payload.tickers,
+        metadata_={"original_category": payload.category},
+    )
+    session.add(entry)
+    await session.flush()
+    return _entry_to_response(entry)
 
 
 @router.put("/outlook/{layer}", response_model=OutlookLayer)
-async def update_outlook(layer: str, payload: OutlookUpdate):
+async def update_outlook(
+    layer: str,
+    payload: OutlookUpdate,
+    session: AsyncSession = Depends(get_session),
+):
     """Update market outlook for a specific time horizon layer."""
     valid_layers = {"long_term", "medium_term", "short_term"}
     if layer not in valid_layers:
@@ -428,16 +365,44 @@ async def update_outlook(layer: str, payload: OutlookUpdate):
             detail=f"Invalid layer '{layer}'. Must be one of: {', '.join(valid_layers)}",
         )
 
-    outlook = _outlook_store[layer]
-    outlook["sentiment"] = payload.sentiment
-    outlook["confidence"] = payload.confidence
-    outlook["summary"] = payload.summary
-    outlook["key_factors"] = payload.key_factors
-    outlook["risks"] = payload.risks
-    outlook["opportunities"] = payload.opportunities
-    outlook["last_updated"] = _now_iso()
+    layer_enum = _LAYER_API_TO_DB[layer]
 
-    return OutlookLayer(**outlook)
+    result = await session.execute(
+        select(MarketOutlook)
+        .where(MarketOutlook.layer == layer_enum)
+        .where(MarketOutlook.asset_class == "general")
+    )
+    outlook = result.scalar_one_or_none()
+
+    sentiment_enum = OutlookSentiment(payload.sentiment)
+
+    if outlook:
+        outlook.outlook = sentiment_enum
+        outlook.confidence = payload.confidence
+        outlook.rationale = payload.summary
+        outlook.key_drivers = payload.key_factors
+    else:
+        outlook = MarketOutlook(
+            id=str(uuid4()),
+            layer=layer_enum,
+            asset_class="general",
+            outlook=sentiment_enum,
+            confidence=payload.confidence,
+            rationale=payload.summary,
+            key_drivers=payload.key_factors,
+        )
+        session.add(outlook)
+
+    return OutlookLayer(
+        layer=layer,
+        sentiment=payload.sentiment,
+        confidence=payload.confidence,
+        summary=payload.summary,
+        key_factors=payload.key_factors,
+        risks=payload.risks,
+        opportunities=payload.opportunities,
+        last_updated=_now_iso(),
+    )
 
 
 @router.post("/data-pipeline/trigger", response_model=DataPipelineResult)
@@ -445,7 +410,6 @@ async def trigger_data_pipeline():
     """Trigger the data pipeline to fetch latest data from all sources.
 
     In production this invokes the KnowledgeAgent's data ingestion pipeline.
-    The prototype returns a representative placeholder result.
     """
     return DataPipelineResult(
         triggered_at=_now_iso(),

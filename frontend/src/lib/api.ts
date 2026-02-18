@@ -9,6 +9,7 @@ import type {
   RiskMetrics,
   PerformanceMetrics,
   AllocationBreakdown,
+  PortfolioPreferences,
   AllAgentsStatus,
   AgentLogEntry,
   LoopControlResponse,
@@ -80,6 +81,12 @@ export const portfolioAPI = {
   rebalance: () =>
     fetchAPI<Record<string, any>>('/api/portfolio/rebalance', {
       method: 'POST',
+    }),
+  getPreferences: () => fetchAPI<PortfolioPreferences>('/api/portfolio/preferences'),
+  updatePreferences: (data: PortfolioPreferences) =>
+    fetchAPI<PortfolioPreferences>('/api/portfolio/preferences', {
+      method: 'PUT',
+      body: JSON.stringify(data),
     }),
 };
 
@@ -176,6 +183,26 @@ export const alertsAPI = {
     fetchAPI<Record<string, any>>('/api/alerts/dismiss-all', {
       method: 'POST',
     }),
+};
+
+// Market Data API
+export const marketDataAPI = {
+  price: (symbol: string) =>
+    fetchAPI<Record<string, any>>(`/api/market-data/price/${symbol}`),
+  prices: (symbols: string[]) =>
+    fetchAPI<Record<string, any>[]>(`/api/market-data/prices?symbols=${symbols.join(',')}`),
+  history: (symbol: string, period = '1mo', interval = '1d') =>
+    fetchAPI<Record<string, any>>(`/api/market-data/history/${symbol}?period=${period}&interval=${interval}`),
+  watchlist: (assetClass: string) =>
+    fetchAPI<Record<string, any>>(`/api/market-data/watchlist/${assetClass}`),
+  watchlists: () =>
+    fetchAPI<Record<string, string[]>>('/api/market-data/watchlists'),
+};
+
+// Seed API
+export const seedAPI = {
+  seed: () =>
+    fetchAPI<Record<string, any>>('/api/seed', { method: 'POST' }),
 };
 
 // RL Training API

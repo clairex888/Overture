@@ -3,23 +3,29 @@ Trades API routes.
 
 Manages the trade lifecycle: creation from idea execution plans, approval
 workflow (human-in-the-loop), parameter adjustment, and closing of positions.
+All data is persisted in PostgreSQL via SQLAlchemy async models.
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel, Field
 from typing import Any
 from datetime import datetime
 from uuid import uuid4
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.models.base import get_session
+from src.models.trade import Trade, TradeStatus, TradeDirection, InstrumentType
+
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
-# Pydantic schemas
+# Pydantic schemas (match frontend expectations)
 # ---------------------------------------------------------------------------
 
 
 class TradeAdjustment(BaseModel):
-    """Parameters that can be adjusted on a pending or active trade."""
     quantity: float | None = Field(None, gt=0)
     limit_price: float | None = Field(None, gt=0)
     stop_loss: float | None = Field(None, gt=0)
@@ -37,10 +43,7 @@ class TradeResponse(BaseModel):
     limit_price: float | None
     stop_loss: float | None
     take_profit: float | None
-    status: str = Field(
-        ...,
-        description="pending_approval, approved, rejected, open, partially_filled, filled, closed, cancelled",
-    )
+    status: str
     fill_price: float | None
     fill_quantity: float | None
     pnl: float | None
@@ -71,78 +74,71 @@ class ActiveSummary(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# In-memory store (swap for DB later)
+# Mapping helpers
 # ---------------------------------------------------------------------------
 
-_trades_store: dict[str, dict[str, Any]] = {}
+_DIRECTION_DB_TO_API = {
+    TradeDirection.LONG: "buy",
+    TradeDirection.SHORT: "sell",
+}
 
-# Seed some sample trades
-_seed_trades = [
-    {
-        "id": str(uuid4()),
-        "idea_id": None,
-        "symbol": "NVDA",
-        "direction": "buy",
-        "instrument_type": "stock",
-        "quantity": 50,
-        "limit_price": 890.00,
-        "stop_loss": 850.00,
-        "take_profit": 950.00,
-        "status": "pending_approval",
-        "fill_price": None,
-        "fill_quantity": None,
-        "pnl": None,
-        "notes": "AI chip momentum play",
-        "created_at": "2026-02-10T14:30:00Z",
-        "updated_at": "2026-02-10T14:30:00Z",
-    },
-    {
-        "id": str(uuid4()),
-        "idea_id": None,
-        "symbol": "ETH-USD",
-        "direction": "buy",
-        "instrument_type": "crypto",
-        "quantity": 5.0,
-        "limit_price": 3_200.00,
-        "stop_loss": 2_900.00,
-        "take_profit": 3_800.00,
-        "status": "open",
-        "fill_price": 3_180.00,
-        "fill_quantity": 5.0,
-        "pnl": 350.00,
-        "notes": "ETH breakout trade",
-        "created_at": "2026-02-05T09:00:00Z",
-        "updated_at": "2026-02-10T16:00:00Z",
-    },
-    {
-        "id": str(uuid4()),
-        "idea_id": None,
-        "symbol": "SPY",
-        "direction": "sell",
-        "instrument_type": "stock",
-        "quantity": 100,
-        "limit_price": None,
-        "stop_loss": 510.00,
-        "take_profit": 470.00,
-        "status": "pending_approval",
-        "fill_price": None,
-        "fill_quantity": None,
-        "pnl": None,
-        "notes": "Hedging position against drawdown",
-        "created_at": "2026-02-11T11:00:00Z",
-        "updated_at": "2026-02-11T11:00:00Z",
-    },
-]
-for t in _seed_trades:
-    _trades_store[t["id"]] = t
+_DIRECTION_API_TO_DB = {v: k for k, v in _DIRECTION_DB_TO_API.items()}
+
+_INSTRUMENT_DB_TO_API = {
+    InstrumentType.EQUITY: "stock",
+    InstrumentType.OPTION: "option",
+    InstrumentType.FUTURE: "future",
+    InstrumentType.ETF: "etf",
+    InstrumentType.BOND: "bond",
+    InstrumentType.CRYPTO: "crypto",
+}
+
+_INSTRUMENT_API_TO_DB = {v: k for k, v in _INSTRUMENT_DB_TO_API.items()}
 
 
 def _now_iso() -> str:
     return datetime.utcnow().isoformat() + "Z"
 
 
-def _trade_to_response(trade: dict[str, Any]) -> TradeResponse:
-    return TradeResponse(**trade)
+def _dt_iso(dt: datetime | None) -> str:
+    if dt is None:
+        return _now_iso()
+    return dt.isoformat() + "Z"
+
+
+def _trade_to_response(trade: Trade) -> TradeResponse:
+    """Convert ORM Trade to API response."""
+    meta = trade.metadata_ or {}
+
+    # Symbol: from metadata or first ticker
+    symbol = meta.get("symbol", "")
+    if not symbol and trade.tickers:
+        symbol = trade.tickers[0] if isinstance(trade.tickers[0], str) else str(trade.tickers[0])
+
+    # Direction: from metadata label or DB enum
+    direction = meta.get("direction_label", _DIRECTION_DB_TO_API.get(trade.direction, "buy"))
+
+    # Instrument type mapping
+    instrument = _INSTRUMENT_DB_TO_API.get(trade.instrument_type, "stock")
+
+    return TradeResponse(
+        id=trade.id,
+        idea_id=trade.idea_id,
+        symbol=symbol,
+        direction=direction,
+        instrument_type=instrument,
+        quantity=trade.quantity or 0,
+        limit_price=meta.get("limit_price") or trade.entry_price,
+        stop_loss=trade.stop_loss,
+        take_profit=trade.take_profit,
+        status=trade.status.value if trade.status else "pending_approval",
+        fill_price=meta.get("fill_price") or (trade.entry_price if trade.status in (TradeStatus.OPEN, TradeStatus.CLOSED) else None),
+        fill_quantity=meta.get("fill_quantity") or (trade.quantity if trade.status in (TradeStatus.OPEN, TradeStatus.CLOSED) else None),
+        pnl=trade.pnl,
+        notes=meta.get("notes"),
+        created_at=_dt_iso(trade.created_at),
+        updated_at=_dt_iso(trade.updated_at),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -151,33 +147,40 @@ def _trade_to_response(trade: dict[str, Any]) -> TradeResponse:
 
 
 @router.get("/pending", response_model=PendingSummary)
-async def list_pending_trades():
+async def list_pending_trades(session: AsyncSession = Depends(get_session)):
     """Get all trades pending human approval."""
-    pending = [
-        t for t in _trades_store.values() if t["status"] == "pending_approval"
-    ]
-    pending.sort(key=lambda t: t["created_at"], reverse=True)
+    result = await session.execute(
+        select(Trade)
+        .where(Trade.status == TradeStatus.PENDING_APPROVAL)
+        .order_by(Trade.created_at.desc())
+    )
+    trades = result.scalars().all()
     return PendingSummary(
-        count=len(pending),
-        trades=[_trade_to_response(t) for t in pending],
+        count=len(trades),
+        trades=[_trade_to_response(t) for t in trades],
     )
 
 
 @router.get("/active", response_model=ActiveSummary)
-async def list_active_trades():
+async def list_active_trades(session: AsyncSession = Depends(get_session)):
     """Get all active (open / partially filled) trades."""
-    active_statuses = {"open", "partially_filled"}
-    active = [t for t in _trades_store.values() if t["status"] in active_statuses]
-    active.sort(key=lambda t: t["updated_at"], reverse=True)
-
-    total_exposure = sum(
-        (t.get("fill_price") or t.get("limit_price") or 0) * t["quantity"]
-        for t in active
+    result = await session.execute(
+        select(Trade)
+        .where(Trade.status.in_([TradeStatus.OPEN, TradeStatus.EXECUTING]))
+        .order_by(Trade.updated_at.desc())
     )
+    trades = result.scalars().all()
+
+    total_exposure = 0.0
+    for t in trades:
+        meta = t.metadata_ or {}
+        price = meta.get("fill_price") or t.entry_price or meta.get("limit_price") or 0
+        total_exposure += price * (t.quantity or 0)
+
     return ActiveSummary(
-        count=len(active),
+        count=len(trades),
         total_exposure=total_exposure,
-        trades=[_trade_to_response(t) for t in active],
+        trades=[_trade_to_response(t) for t in trades],
     )
 
 
@@ -186,115 +189,151 @@ async def list_trades(
     status: str | None = Query(None, description="Filter by status"),
     direction: str | None = Query(None, description="Filter by direction (buy, sell)"),
     instrument_type: str | None = Query(None, description="Filter by instrument type"),
+    session: AsyncSession = Depends(get_session),
 ):
     """List all trades with optional filters."""
-    results = list(_trades_store.values())
+    stmt = select(Trade)
 
     if status:
-        results = [t for t in results if t["status"] == status]
-    if direction:
-        results = [t for t in results if t["direction"] == direction]
-    if instrument_type:
-        results = [t for t in results if t["instrument_type"] == instrument_type]
+        try:
+            status_enum = TradeStatus(status)
+            stmt = stmt.where(Trade.status == status_enum)
+        except ValueError:
+            pass
 
-    results.sort(key=lambda t: t["created_at"], reverse=True)
-    return [_trade_to_response(t) for t in results]
+    if direction:
+        dir_enum = _DIRECTION_API_TO_DB.get(direction)
+        if dir_enum:
+            stmt = stmt.where(Trade.direction == dir_enum)
+
+    if instrument_type:
+        inst_enum = _INSTRUMENT_API_TO_DB.get(instrument_type)
+        if inst_enum:
+            stmt = stmt.where(Trade.instrument_type == inst_enum)
+
+    stmt = stmt.order_by(Trade.created_at.desc())
+    result = await session.execute(stmt)
+    trades = result.scalars().all()
+    return [_trade_to_response(t) for t in trades]
 
 
 @router.get("/{trade_id}", response_model=TradeResponse)
-async def get_trade(trade_id: str):
+async def get_trade(trade_id: str, session: AsyncSession = Depends(get_session)):
     """Get details for a specific trade."""
-    trade = _trades_store.get(trade_id)
+    result = await session.execute(select(Trade).where(Trade.id == trade_id))
+    trade = result.scalar_one_or_none()
     if not trade:
         raise HTTPException(status_code=404, detail=f"Trade {trade_id} not found")
     return _trade_to_response(trade)
 
 
 @router.post("/{trade_id}/approve", response_model=TradeResponse)
-async def approve_trade(trade_id: str):
-    """Approve a pending trade plan so it can be executed.
-
-    In production this would submit the order to the broker.  The prototype
-    moves the status to 'approved'.
-    """
-    trade = _trades_store.get(trade_id)
+async def approve_trade(trade_id: str, session: AsyncSession = Depends(get_session)):
+    """Approve a pending trade plan so it can be executed."""
+    result = await session.execute(select(Trade).where(Trade.id == trade_id))
+    trade = result.scalar_one_or_none()
     if not trade:
         raise HTTPException(status_code=404, detail=f"Trade {trade_id} not found")
 
-    if trade["status"] != "pending_approval":
+    if trade.status != TradeStatus.PENDING_APPROVAL:
         raise HTTPException(
             status_code=400,
-            detail=f"Trade must be 'pending_approval' to approve, currently '{trade['status']}'",
+            detail=f"Trade must be 'pending_approval' to approve, currently '{trade.status.value}'",
         )
 
-    trade["status"] = "approved"
-    trade["updated_at"] = _now_iso()
+    trade.status = TradeStatus.APPROVED
     return _trade_to_response(trade)
 
 
 @router.post("/{trade_id}/reject", response_model=TradeResponse)
-async def reject_trade(trade_id: str, payload: TradeRejectPayload):
+async def reject_trade(
+    trade_id: str,
+    payload: TradeRejectPayload,
+    session: AsyncSession = Depends(get_session),
+):
     """Reject a pending trade plan with a reason."""
-    trade = _trades_store.get(trade_id)
+    result = await session.execute(select(Trade).where(Trade.id == trade_id))
+    trade = result.scalar_one_or_none()
     if not trade:
         raise HTTPException(status_code=404, detail=f"Trade {trade_id} not found")
 
-    if trade["status"] != "pending_approval":
+    if trade.status != TradeStatus.PENDING_APPROVAL:
         raise HTTPException(
             status_code=400,
-            detail=f"Trade must be 'pending_approval' to reject, currently '{trade['status']}'",
+            detail=f"Trade must be 'pending_approval' to reject, currently '{trade.status.value}'",
         )
 
-    trade["status"] = "rejected"
-    trade["notes"] = f"{trade.get('notes', '') or ''} | Rejected: {payload.reason}".strip(" |")
-    trade["updated_at"] = _now_iso()
+    trade.status = TradeStatus.CANCELLED
+    meta = dict(trade.metadata_ or {})
+    existing_notes = meta.get("notes", "")
+    meta["notes"] = f"{existing_notes} | Rejected: {payload.reason}".strip(" |")
+    trade.metadata_ = meta
     return _trade_to_response(trade)
 
 
 @router.post("/{trade_id}/adjust", response_model=TradeResponse)
-async def adjust_trade(trade_id: str, payload: TradeAdjustment):
+async def adjust_trade(
+    trade_id: str,
+    payload: TradeAdjustment,
+    session: AsyncSession = Depends(get_session),
+):
     """Adjust trade parameters (size, stop loss, take profit, etc.)."""
-    trade = _trades_store.get(trade_id)
+    result = await session.execute(select(Trade).where(Trade.id == trade_id))
+    trade = result.scalar_one_or_none()
     if not trade:
         raise HTTPException(status_code=404, detail=f"Trade {trade_id} not found")
 
-    adjustable_statuses = {"pending_approval", "approved", "open", "partially_filled"}
-    if trade["status"] not in adjustable_statuses:
+    adjustable = {TradeStatus.PENDING_APPROVAL, TradeStatus.APPROVED, TradeStatus.OPEN, TradeStatus.EXECUTING}
+    if trade.status not in adjustable:
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot adjust trade in '{trade['status']}' status",
+            detail=f"Cannot adjust trade in '{trade.status.value}' status",
         )
 
     updates = payload.model_dump(exclude_unset=True)
-    for key, value in updates.items():
-        trade[key] = value
+    meta = dict(trade.metadata_ or {})
 
-    trade["updated_at"] = _now_iso()
+    if "quantity" in updates:
+        trade.quantity = updates["quantity"]
+    if "limit_price" in updates:
+        meta["limit_price"] = updates["limit_price"]
+        trade.entry_price = updates["limit_price"]
+    if "stop_loss" in updates:
+        trade.stop_loss = updates["stop_loss"]
+    if "take_profit" in updates:
+        trade.take_profit = updates["take_profit"]
+    if "notes" in updates:
+        meta["notes"] = updates["notes"]
+
+    trade.metadata_ = meta
     return _trade_to_response(trade)
 
 
 @router.post("/{trade_id}/close", response_model=TradeResponse)
-async def close_trade(trade_id: str, payload: TradeClosePayload | None = None):
-    """Close/exit an active trade.
-
-    In production this submits a closing order to the broker.  The prototype
-    moves status to 'closed'.
-    """
-    trade = _trades_store.get(trade_id)
+async def close_trade(
+    trade_id: str,
+    payload: TradeClosePayload | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Close/exit an active trade."""
+    result = await session.execute(select(Trade).where(Trade.id == trade_id))
+    trade = result.scalar_one_or_none()
     if not trade:
         raise HTTPException(status_code=404, detail=f"Trade {trade_id} not found")
 
-    closeable = {"open", "partially_filled", "approved"}
-    if trade["status"] not in closeable:
+    closeable = {TradeStatus.OPEN, TradeStatus.EXECUTING, TradeStatus.APPROVED}
+    if trade.status not in closeable:
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot close trade in '{trade['status']}' status",
+            detail=f"Cannot close trade in '{trade.status.value}' status",
         )
 
     reason = payload.reason if payload else None
     if reason:
-        trade["notes"] = f"{trade.get('notes', '') or ''} | Closed: {reason}".strip(" |")
+        meta = dict(trade.metadata_ or {})
+        existing_notes = meta.get("notes", "")
+        meta["notes"] = f"{existing_notes} | Closed: {reason}".strip(" |")
+        trade.metadata_ = meta
 
-    trade["status"] = "closed"
-    trade["updated_at"] = _now_iso()
+    trade.status = TradeStatus.CLOSED
     return _trade_to_response(trade)

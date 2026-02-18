@@ -63,6 +63,10 @@ class Base(DeclarativeBase):
     )
 
 
+db_ready: bool = False
+"""Module-level flag indicating whether the database is reachable."""
+
+
 async def init_db(retries: int = 5, delay: float = 2.0) -> None:
     """Create all database tables.
 
@@ -71,23 +75,48 @@ async def init_db(retries: int = 5, delay: float = 2.0) -> None:
 
     Retries connection with exponential backoff to handle cases where
     the database is still starting up (e.g. Railway deployments).
+
+    If the database is unreachable after all retries the error is logged
+    but the application is allowed to start so that Railway health-checks
+    can still pass and the service stays up.
     """
+    global db_ready  # noqa: PLW0603
+
+    logger.info("DATABASE_URL (host part): %s", _safe_url(settings.database_url))
+
     for attempt in range(1, retries + 1):
         try:
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
             logger.info("Database initialized successfully.")
+            db_ready = True
             return
         except Exception as exc:
             if attempt == retries:
-                logger.error("Failed to connect to database after %d attempts: %s", retries, exc)
-                raise
+                logger.error(
+                    "Failed to connect to database after %d attempts: %s. "
+                    "The app will start WITHOUT a database — most endpoints will "
+                    "return errors until a valid DATABASE_URL is configured.",
+                    retries,
+                    exc,
+                )
+                return  # let the app start anyway
             wait = delay * (2 ** (attempt - 1))
             logger.warning(
                 "Database connection attempt %d/%d failed (%s). Retrying in %.1fs...",
                 attempt, retries, exc, wait,
             )
             await asyncio.sleep(wait)
+
+
+def _safe_url(url: str) -> str:
+    """Return the host portion of a database URL for logging (no credentials)."""
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url.replace("+asyncpg", ""))
+        return f"{parsed.hostname}:{parsed.port}"
+    except Exception:
+        return "<unparseable>"
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:

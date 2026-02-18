@@ -15,7 +15,7 @@ from src.models.agent_state import (
     AgentTaskStatus,
     AgentType,
 )
-from src.models.base import Base, async_session_factory, engine, get_session, init_db
+from src.models.base import Base, async_session_factory, db_ready, engine, get_session, init_db
 from src.models.idea import Idea, IdeaSource, IdeaStatus, RiskLevel, Timeframe
 from src.models.knowledge import (
     KnowledgeCategory,
@@ -33,6 +33,7 @@ __all__ = [
     "Base",
     "engine",
     "async_session_factory",
+    "db_ready",
     "init_db",
     "get_session",
     # Idea

@@ -194,6 +194,10 @@ export const portfolioAPI = {
       method: 'POST',
       body: JSON.stringify({ portfolio_id: portfolioId }),
     }),
+  deletePortfolio: (portfolioId: string) =>
+    fetchAPI<{ success: boolean; message: string }>(`/api/portfolio/${portfolioId}`, {
+      method: 'DELETE',
+    }),
 };
 
 // Trades API

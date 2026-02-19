@@ -34,6 +34,12 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.error("Master user seed FAILED: %s", exc, exc_info=True)
 
+        # Migrate orphan portfolios (no user_id) to the admin user
+        try:
+            await _assign_orphan_portfolios()
+        except Exception as exc:
+            logger.warning("Orphan portfolio migration skipped: %s", exc)
+
     yield
 
 
@@ -73,6 +79,32 @@ async def _seed_master_user() -> None:
         session.add(admin)
         await session.commit()
         logger.info("Master admin account created: admin@overture.ai")
+
+
+async def _assign_orphan_portfolios() -> None:
+    """One-time migration: assign any portfolios without a user_id to the admin."""
+    from sqlalchemy import select, update
+    from src.models.portfolio import Portfolio
+    from src.models.user import User
+
+    async with async_session_factory() as session:
+        # Find admin user
+        result = await session.execute(
+            select(User).where(User.email == "admin@overture.ai")
+        )
+        admin = result.scalar_one_or_none()
+        if not admin:
+            return
+
+        # Assign orphan portfolios to admin
+        result = await session.execute(
+            update(Portfolio)
+            .where(Portfolio.user_id.is_(None))
+            .values(user_id=admin.id)
+        )
+        if result.rowcount > 0:
+            await session.commit()
+            logger.info("Assigned %d orphan portfolios to admin user.", result.rowcount)
 
 
 app = FastAPI(

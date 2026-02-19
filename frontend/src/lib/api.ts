@@ -12,6 +12,8 @@ import type {
   PortfolioPreferences,
   PortfolioProposal,
   ApproveResult,
+  PortfolioListItem,
+  PortfolioInitResult,
   AllAgentsStatus,
   AgentLogEntry,
   LoopControlResponse,
@@ -122,35 +124,74 @@ export const ideasAPI = {
 
 // Portfolio API
 export const portfolioAPI = {
-  overview: () => fetchAPI<PortfolioOverview>('/api/portfolio'),
-  positions: () => fetchAPI<Position[]>('/api/portfolio/positions'),
-  risk: () => fetchAPI<RiskMetrics>('/api/portfolio/risk'),
-  performance: () => fetchAPI<PerformanceMetrics>('/api/portfolio/performance'),
-  allocation: () => fetchAPI<AllocationBreakdown>('/api/portfolio/allocation'),
-  rebalance: () =>
+  list: () => fetchAPI<PortfolioListItem[]>('/api/portfolio/list'),
+  overview: (portfolioId?: string) => {
+    const qs = portfolioId ? `?portfolio_id=${portfolioId}` : '';
+    return fetchAPI<PortfolioOverview>(`/api/portfolio${qs}`);
+  },
+  positions: (portfolioId?: string) => {
+    const qs = portfolioId ? `?portfolio_id=${portfolioId}` : '';
+    return fetchAPI<Position[]>(`/api/portfolio/positions${qs}`);
+  },
+  risk: (portfolioId?: string) => {
+    const qs = portfolioId ? `?portfolio_id=${portfolioId}` : '';
+    return fetchAPI<RiskMetrics>(`/api/portfolio/risk${qs}`);
+  },
+  performance: (portfolioId?: string) => {
+    const qs = portfolioId ? `?portfolio_id=${portfolioId}` : '';
+    return fetchAPI<PerformanceMetrics>(`/api/portfolio/performance${qs}`);
+  },
+  allocation: (portfolioId?: string) => {
+    const qs = portfolioId ? `?portfolio_id=${portfolioId}` : '';
+    return fetchAPI<AllocationBreakdown>(`/api/portfolio/allocation${qs}`);
+  },
+  rebalance: (portfolioId?: string) =>
     fetchAPI<Record<string, any>>('/api/portfolio/rebalance', {
       method: 'POST',
+      body: JSON.stringify(portfolioId ? { portfolio_id: portfolioId } : {}),
     }),
-  getPreferences: () => fetchAPI<PortfolioPreferences>('/api/portfolio/preferences'),
-  updatePreferences: (data: PortfolioPreferences) =>
-    fetchAPI<PortfolioPreferences>('/api/portfolio/preferences', {
+  getPreferences: (portfolioId?: string) => {
+    const qs = portfolioId ? `?portfolio_id=${portfolioId}` : '';
+    return fetchAPI<PortfolioPreferences>(`/api/portfolio/preferences${qs}`);
+  },
+  updatePreferences: (data: PortfolioPreferences, portfolioId?: string) => {
+    const qs = portfolioId ? `?portfolio_id=${portfolioId}` : '';
+    return fetchAPI<PortfolioPreferences>(`/api/portfolio/preferences${qs}`, {
       method: 'PUT',
       body: JSON.stringify(data),
-    }),
-  initialize: (initialAmount: number = 1_000_000) =>
-    fetchAPI<PortfolioProposal>('/api/portfolio/initialize', {
+    });
+  },
+  initialize: (amount: number, name?: string, portfolioId?: string) =>
+    fetchAPI<PortfolioInitResult>('/api/portfolio/initialize', {
       method: 'POST',
-      body: JSON.stringify({ initial_amount: initialAmount }),
+      body: JSON.stringify({
+        initial_amount: amount,
+        ...(name ? { name } : {}),
+        ...(portfolioId ? { portfolio_id: portfolioId } : {}),
+      }),
     }),
-  propose: (initialAmount: number, holdings: Record<string, any>[]) =>
+  propose: (portfolioId: string, initialAmount: number, holdings: Record<string, any>[]) =>
     fetchAPI<PortfolioProposal>('/api/portfolio/propose', {
       method: 'POST',
-      body: JSON.stringify({ initial_amount: initialAmount, holdings }),
+      body: JSON.stringify({
+        portfolio_id: portfolioId,
+        initial_amount: initialAmount,
+        holdings,
+      }),
     }),
-  approve: (initialAmount: number, holdings: Record<string, any>[]) =>
+  approve: (portfolioId: string, initialAmount: number, holdings: Record<string, any>[]) =>
     fetchAPI<ApproveResult>('/api/portfolio/approve', {
       method: 'POST',
-      body: JSON.stringify({ initial_amount: initialAmount, holdings }),
+      body: JSON.stringify({
+        portfolio_id: portfolioId,
+        initial_amount: initialAmount,
+        holdings,
+      }),
+    }),
+  generateProposal: (portfolioId: string) =>
+    fetchAPI<PortfolioProposal>('/api/portfolio/generate-proposal', {
+      method: 'POST',
+      body: JSON.stringify({ portfolio_id: portfolioId }),
     }),
 };
 

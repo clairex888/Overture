@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   DollarSign,
@@ -520,14 +520,6 @@ function LoadingSkeleton() {
 
 function PortfolioPageInner() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-
-  // Capture URL params once on mount (immune to URL cleanup race conditions)
-  const initialUrlParamsRef = useRef<{ portfolioId: string | null; approved: boolean }>({
-    portfolioId: null,
-    approved: false,
-  });
-  const urlParamsRead = useRef(false);
 
   // Portfolio list state
   const [portfolios, setPortfolios] = useState<PortfolioListItem[]>([]);
@@ -589,85 +581,10 @@ function PortfolioPageInner() {
   // Success banner
   const [showApprovedBanner, setShowApprovedBanner] = useState(false);
 
-  // Read URL params once on mount into ref, then clean the URL.
-  // Using a ref prevents the URL cleanup (replaceState) from causing
-  // useSearchParams to change → recreating fetchPortfolioList → double-fetch race.
-  useEffect(() => {
-    if (urlParamsRead.current) return;
-    urlParamsRead.current = true;
-
-    const pid = searchParams.get('portfolio_id');
-    const approved = searchParams.get('approved') === 'true';
-    initialUrlParamsRef.current = { portfolioId: pid, approved };
-
-    if (approved) {
-      setShowApprovedBanner(true);
-    }
-
-    // Clean URL without reloading
-    if (pid || approved) {
-      const url = new URL(window.location.href);
-      url.searchParams.delete('approved');
-      url.searchParams.delete('portfolio_id');
-      window.history.replaceState({}, '', url.pathname + url.search);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Fetch portfolio list on mount. Uses ref for URL params so this
-  // callback has NO external dependencies and only runs once.
-  const fetchPortfolioList = useCallback(async () => {
-    setListLoading(true);
-    try {
-      const list = await portfolioAPI.list();
-      setPortfolios(list);
-
-      // Check if user has any portfolio with real positions
-      const hasAnyPositions = list.some((p) => p.positions_count > 0 || p.invested > 0);
-
-      if (list.length === 0) {
-        // No portfolios at all — show first-time init modal
-        setModalMode('create');
-        setModalOpen(true);
-        setDataLoading(false); // nothing to load
-      } else {
-        // Use the ref-captured URL param (immune to URL cleanup race)
-        const { portfolioId: urlPortfolioId, approved } = initialUrlParamsRef.current;
-        const targetFromUrl = urlPortfolioId ? list.find((p) => p.id === urlPortfolioId) : null;
-
-        setActivePortfolioId((prev) => {
-          if (targetFromUrl) return targetFromUrl.id;
-          const stillExists = list.find((p) => p.id === prev);
-          if (stillExists) return prev;
-          // Prefer a portfolio with positions, otherwise first
-          const withPositions = list.find((p) => p.positions_count > 0 || p.invested > 0);
-          return withPositions ? withPositions.id : list[0].id;
-        });
-
-        // If ALL portfolios are empty AND we're NOT returning from approval,
-        // show init popup (first-time experience)
-        if (!hasAnyPositions && !approved) {
-          setModalMode('create');
-          setModalOpen(true);
-        }
-      }
-    } catch (err) {
-      console.error('Failed to fetch portfolio list:', err);
-      setPortfolios([]);
-      setModalMode('create');
-      setModalOpen(true);
-      setDataLoading(false);
-    } finally {
-      setListLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchPortfolioList();
-  }, [fetchPortfolioList]);
-
-  // Fetch monitoring data when active portfolio changes.
-  // Uses allSettled so one failing call (e.g. outlook) doesn't wipe all data.
+  // ---------------------------------------------------------------
+  // Fetch monitoring data for a specific portfolio.
+  // Uses allSettled so one failing call doesn't wipe all data.
+  // ---------------------------------------------------------------
   const fetchMonitoringData = useCallback(async (portfolioId: string) => {
     if (!portfolioId) return;
     setDataLoading(true);
@@ -690,28 +607,93 @@ function PortfolioPageInner() {
       results.forEach((r, i) => {
         if (r.status === 'rejected') {
           const names = ['overview', 'positions', 'risk', 'allocation', 'outlook'];
-          console.error(`Failed to fetch ${names[i]}:`, r.reason);
+          console.error(`[Portfolio] Failed to fetch ${names[i]}:`, r.reason);
         }
       });
     } catch (err) {
-      console.error('Failed to fetch portfolio monitoring data:', err);
+      console.error('[Portfolio] Failed to fetch monitoring data:', err);
     } finally {
       setDataLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    if (activePortfolioId) {
-      fetchMonitoringData(activePortfolioId);
-    } else if (!listLoading) {
-      // No portfolio selected and list is done loading — nothing to monitor
+  // ---------------------------------------------------------------
+  // Single load function: fetches list THEN monitoring data
+  // sequentially in ONE async call (no effect chains / race conditions)
+  // ---------------------------------------------------------------
+  const loadPortfolioPage = useCallback(async () => {
+    // 1. Read URL params from the browser (once)
+    const pid = new URLSearchParams(window.location.search).get('portfolio_id');
+    const approved = new URLSearchParams(window.location.search).get('approved') === 'true';
+
+    if (approved) {
+      setShowApprovedBanner(true);
+    }
+
+    // Clean URL without reloading
+    if (pid || approved) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('approved');
+      url.searchParams.delete('portfolio_id');
+      window.history.replaceState({}, '', url.pathname + url.search);
+    }
+
+    // 2. Fetch portfolio list
+    setListLoading(true);
+    try {
+      const list = await portfolioAPI.list();
+      setPortfolios(list);
+
+      if (list.length === 0) {
+        // No portfolios — show first-time init modal
+        setModalMode('create');
+        setModalOpen(true);
+        setListLoading(false);
+        setDataLoading(false);
+        return;
+      }
+
+      // 3. Determine which portfolio to show
+      const targetFromUrl = pid ? list.find((p) => p.id === pid) : null;
+      let selectedId: string;
+      if (targetFromUrl) {
+        selectedId = targetFromUrl.id;
+      } else {
+        const withPositions = list.find((p) => p.positions_count > 0 || p.invested > 0);
+        selectedId = withPositions ? withPositions.id : list[0].id;
+      }
+      setActivePortfolioId(selectedId);
+      setListLoading(false);
+
+      // 4. Fetch monitoring data directly — no effect chain needed
+      await fetchMonitoringData(selectedId);
+
+      // 5. Show init modal only if ALL portfolios empty and NOT from approval
+      const hasAnyPositions = list.some((p) => p.positions_count > 0 || p.invested > 0);
+      if (!hasAnyPositions && !approved) {
+        setModalMode('create');
+        setModalOpen(true);
+      }
+    } catch (err) {
+      console.error('[Portfolio] Failed to load page:', err);
+      setPortfolios([]);
+      setModalMode('create');
+      setModalOpen(true);
+      setListLoading(false);
       setDataLoading(false);
     }
-  }, [activePortfolioId, fetchMonitoringData, listLoading]);
+  }, [fetchMonitoringData]);
+
+  // Run once on mount
+  useEffect(() => {
+    loadPortfolioPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Handlers
   const handlePortfolioChange = (id: string) => {
     setActivePortfolioId(id);
+    fetchMonitoringData(id);
   };
 
   const handleNewPortfolio = () => {
@@ -1218,19 +1200,9 @@ function PortfolioPageInner() {
 }
 
 // ============================================================
-// Default export wraps in Suspense for useSearchParams
+// Default export
 // ============================================================
 
 export default function PortfolioPage() {
-  return (
-    <Suspense
-      fallback={
-        <div className="flex items-center justify-center py-24">
-          <Loader2 className="w-8 h-8 text-accent animate-spin" />
-        </div>
-      }
-    >
-      <PortfolioPageInner />
-    </Suspense>
-  );
+  return <PortfolioPageInner />;
 }

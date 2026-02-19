@@ -412,6 +412,7 @@ export interface ProposedTrade {
 }
 
 export interface PortfolioProposal {
+  portfolio_id: string;
   initial_amount: number;
   total_value: number;
   total_invested: number;
@@ -434,6 +435,26 @@ export interface ApproveResult {
   cash: number;
   total_invested: number;
   total_trading_cost: number;
+  message: string;
+}
+
+export interface PortfolioListItem {
+  id: string;
+  name: string;
+  total_value: number;
+  cash: number;
+  invested: number;
+  pnl: number;
+  pnl_pct: number;
+  status: string;
+  positions_count: number;
+  created_at: string;
+}
+
+export interface PortfolioInitResult {
+  portfolio_id: string;
+  name: string;
+  initial_amount: number;
   message: string;
 }
 

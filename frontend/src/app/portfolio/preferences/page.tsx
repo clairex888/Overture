@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   ArrowLeft,
@@ -14,6 +15,8 @@ import {
   X,
   Check,
   AlertTriangle,
+  Loader2,
+  Rocket,
 } from 'lucide-react';
 import { portfolioAPI } from '@/lib/api';
 import type { PortfolioPreferences, AssetAllocationTarget } from '@/types';
@@ -74,19 +77,25 @@ const ASSET_CLASS_COLORS: Record<string, string> = {
   cash: 'bg-slate-500',
 };
 
-export default function PortfolioPreferencesPage() {
+function PreferencesPageInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const portfolioId = searchParams.get('portfolio_id') || undefined;
+  const isInitFlow = searchParams.get('init') === 'true';
+
   const [preferences, setPreferences] = useState<PortfolioPreferences>(DEFAULT_PREFERENCES);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [tickerInput, setTickerInput] = useState('');
+  const [generating, setGenerating] = useState(false);
 
   useEffect(() => {
     async function loadPreferences() {
       setLoading(true);
       try {
-        const data = await portfolioAPI.getPreferences();
+        const data = await portfolioAPI.getPreferences(portfolioId);
         setPreferences(data);
       } catch (err) {
         console.error('Failed to load preferences, using defaults:', err);
@@ -96,7 +105,7 @@ export default function PortfolioPreferencesPage() {
       }
     }
     loadPreferences();
-  }, []);
+  }, [portfolioId]);
 
   const allocationTotal = preferences.allocation_targets.reduce(
     (sum, t) => sum + t.target_weight,
@@ -164,7 +173,7 @@ export default function PortfolioPreferencesPage() {
     setSaveSuccess(false);
     setSaveError(null);
     try {
-      await portfolioAPI.updatePreferences(preferences);
+      await portfolioAPI.updatePreferences(preferences, portfolioId);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch (err) {
@@ -172,6 +181,21 @@ export default function PortfolioPreferencesPage() {
       setSaveError(err instanceof Error ? err.message : 'Failed to save preferences');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleGenerateProposal = async () => {
+    if (!portfolioId) return;
+    // Save preferences first, then navigate to proposal
+    setGenerating(true);
+    setSaveError(null);
+    try {
+      await portfolioAPI.updatePreferences(preferences, portfolioId);
+      router.push(`/portfolio/proposal?portfolio_id=${portfolioId}`);
+    } catch (err) {
+      console.error('Failed to save preferences:', err);
+      setSaveError(err instanceof Error ? err.message : 'Failed to save preferences');
+      setGenerating(false);
     }
   };
 
@@ -754,7 +778,7 @@ export default function PortfolioPreferencesPage() {
         </div>
       </div>
 
-      {/* Save Button */}
+      {/* Save / Generate Proposal Buttons */}
       <div className="flex items-center justify-between">
         <div>
           {saveSuccess && (
@@ -770,19 +794,55 @@ export default function PortfolioPreferencesPage() {
             </div>
           )}
         </div>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-semibold transition-all ${
-            saving
-              ? 'bg-info/50 text-white/70 cursor-not-allowed'
-              : 'bg-info hover:bg-info/90 text-white shadow-lg shadow-info/20'
-          }`}
-        >
-          <Save className="w-4 h-4" />
-          {saving ? 'Saving...' : 'Save Preferences'}
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleSave}
+            disabled={saving || generating}
+            className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+              saving
+                ? 'bg-info/50 text-white/70 cursor-not-allowed'
+                : 'bg-info hover:bg-info/90 text-white shadow-lg shadow-info/20'
+            }`}
+          >
+            <Save className="w-4 h-4" />
+            {saving ? 'Saving...' : 'Save Preferences'}
+          </button>
+          {portfolioId && (
+            <button
+              onClick={handleGenerateProposal}
+              disabled={generating || saving}
+              className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-semibold bg-accent hover:bg-accent/90 text-white shadow-lg shadow-accent/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {generating ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Saving & Generating...
+                </>
+              ) : (
+                <>
+                  <Rocket className="w-4 h-4" />
+                  {isInitFlow ? 'Save & Generate Proposal' : 'Generate Proposal'}
+                </>
+              )}
+            </button>
+          )}
+        </div>
       </div>
     </div>
+  );
+}
+
+// Wrap in Suspense for useSearchParams
+export default function PortfolioPreferencesPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center py-24">
+          <Loader2 className="w-8 h-8 text-accent animate-spin" />
+        </div>
+      }
+    >
+      <PreferencesPageInner />
+    </Suspense>
   );
 }

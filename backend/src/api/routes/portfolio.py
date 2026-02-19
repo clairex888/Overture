@@ -7,7 +7,7 @@ All data is persisted in PostgreSQL via SQLAlchemy async models.
 """
 
 import logging
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, Field
 from typing import Any
 from datetime import datetime
@@ -30,6 +30,8 @@ from src.services.portfolio_init import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+MAX_PORTFOLIOS = 5
 
 # ---------------------------------------------------------------------------
 # Pydantic schemas (match frontend expectations exactly)
@@ -154,6 +156,111 @@ class RebalanceResult(BaseModel):
     triggered_at: str
 
 
+class PortfolioListItem(BaseModel):
+    id: str
+    name: str
+    total_value: float
+    cash: float
+    invested: float
+    pnl: float
+    pnl_pct: float
+    status: str
+    positions_count: int
+    created_at: str
+
+
+class InitializeRequest(BaseModel):
+    initial_amount: float = Field(1_000_000, gt=0)
+    name: str = Field("Paper Portfolio", max_length=255)
+    portfolio_id: str | None = Field(None, description="If provided, reinitialize this portfolio")
+
+
+class InitializeResult(BaseModel):
+    portfolio_id: str
+    name: str
+    initial_amount: float
+    message: str
+
+
+class GenerateProposalRequest(BaseModel):
+    portfolio_id: str
+
+
+class ProposedHolding(BaseModel):
+    ticker: str
+    name: str
+    asset_class: str
+    sub_class: str
+    instrument: str
+    direction: str
+    quantity: float
+    price: float
+    fill_price: float
+    market_value: float
+    weight: float
+    trading_cost: dict[str, float]
+
+
+class ProposedTrade(BaseModel):
+    ticker: str
+    name: str
+    direction: str
+    instrument: str
+    quantity: float
+    price: float
+    fill_price: float
+    notional: float
+    spread_cost: float
+    impact_cost: float
+    commission: float
+    sec_fee: float
+    total_cost: float
+    slippage_pct: float
+
+
+class PortfolioProposal(BaseModel):
+    portfolio_id: str
+    initial_amount: float
+    total_value: float
+    total_invested: float
+    cash: float
+    total_trading_cost: float
+    num_positions: int
+    holdings: list[ProposedHolding]
+    trades: list[ProposedTrade]
+    allocation_summary: dict[str, float]
+    risk_appetite: str
+    strategy_notes: list[str]
+
+
+class TweakRequest(BaseModel):
+    """User can tweak individual holdings before approving."""
+    portfolio_id: str
+    initial_amount: float = Field(1_000_000, gt=0)
+    holdings: list[dict[str, Any]] = Field(
+        ..., description="Modified holdings list with ticker, quantity, etc."
+    )
+
+
+class ApproveRequest(BaseModel):
+    """User approves the proposal to execute."""
+    portfolio_id: str
+    initial_amount: float = Field(1_000_000, gt=0)
+    holdings: list[dict[str, Any]]
+
+
+class ApproveResult(BaseModel):
+    success: bool
+    portfolio_id: str
+    positions_created: int
+    trades_created: int
+    total_value: float
+    cash: float
+    total_invested: float
+    total_trading_cost: float
+    message: str
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -169,8 +276,25 @@ def _dt_iso(dt: datetime | None) -> str:
     return dt.isoformat() + "Z"
 
 
-async def _get_active_portfolio(session: AsyncSession) -> Portfolio:
-    """Return the first active portfolio or raise 404."""
+async def _get_portfolio_by_id(session: AsyncSession, portfolio_id: str) -> Portfolio:
+    """Fetch a portfolio by its ID or raise 404."""
+    result = await session.execute(
+        select(Portfolio).where(Portfolio.id == portfolio_id)
+    )
+    portfolio = result.scalar_one_or_none()
+    if not portfolio:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Portfolio {portfolio_id} not found.",
+        )
+    return portfolio
+
+
+async def _get_portfolio(session: AsyncSession, portfolio_id: str | None = None) -> Portfolio:
+    """Return a portfolio by ID, or fall back to the first active portfolio."""
+    if portfolio_id:
+        return await _get_portfolio_by_id(session, portfolio_id)
+    # Fallback: first active portfolio (backward compat)
     result = await session.execute(
         select(Portfolio).where(Portfolio.status == PortfolioStatus.ACTIVE).limit(1)
     )
@@ -178,7 +302,7 @@ async def _get_active_portfolio(session: AsyncSession) -> Portfolio:
     if not portfolio:
         raise HTTPException(
             status_code=404,
-            detail="No active portfolio found. Call POST /api/seed to initialize.",
+            detail="No active portfolio found. Call POST /api/portfolio/initialize to create one.",
         )
     return portfolio
 
@@ -205,10 +329,46 @@ def _position_to_response(pos: PositionModel) -> Position:
 # ---------------------------------------------------------------------------
 
 
+@router.get("/list", response_model=list[PortfolioListItem])
+async def list_portfolios(session: AsyncSession = Depends(get_session)):
+    """Return all portfolios with summary info."""
+    result = await session.execute(
+        select(Portfolio).order_by(Portfolio.created_at.desc())
+    )
+    portfolios = result.scalars().all()
+
+    items: list[PortfolioListItem] = []
+    for p in portfolios:
+        count_result = await session.execute(
+            select(func.count())
+            .select_from(PositionModel)
+            .where(PositionModel.portfolio_id == p.id)
+        )
+        positions_count = count_result.scalar() or 0
+
+        items.append(PortfolioListItem(
+            id=p.id,
+            name=p.name,
+            total_value=p.total_value or 0,
+            cash=p.cash or 0,
+            invested=p.invested or 0,
+            pnl=p.pnl or 0,
+            pnl_pct=p.pnl_pct or 0,
+            status=p.status.value if hasattr(p.status, "value") else str(p.status),
+            positions_count=positions_count,
+            created_at=_dt_iso(p.created_at),
+        ))
+
+    return items
+
+
 @router.get("/", response_model=PortfolioOverview)
-async def get_portfolio_overview(session: AsyncSession = Depends(get_session)):
+async def get_portfolio_overview(
+    portfolio_id: str | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+):
     """Get portfolio overview including total value, P&L, and allocation summary."""
-    portfolio = await _get_active_portfolio(session)
+    portfolio = await _get_portfolio(session, portfolio_id)
 
     count_result = await session.execute(
         select(func.count())
@@ -231,9 +391,12 @@ async def get_portfolio_overview(session: AsyncSession = Depends(get_session)):
 
 
 @router.get("/positions", response_model=list[Position])
-async def list_positions(session: AsyncSession = Depends(get_session)):
+async def list_positions(
+    portfolio_id: str | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+):
     """List all current portfolio positions."""
-    portfolio = await _get_active_portfolio(session)
+    portfolio = await _get_portfolio(session, portfolio_id)
 
     result = await session.execute(
         select(PositionModel)
@@ -257,9 +420,12 @@ async def get_position(position_id: str, session: AsyncSession = Depends(get_ses
 
 
 @router.get("/preferences", response_model=PortfolioPreferences)
-async def get_preferences(session: AsyncSession = Depends(get_session)):
+async def get_preferences(
+    portfolio_id: str | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+):
     """Get current portfolio preferences."""
-    portfolio = await _get_active_portfolio(session)
+    portfolio = await _get_portfolio(session, portfolio_id)
     prefs = portfolio.preferences or {}
 
     # Build with defaults for any missing fields (backward compat with old data)
@@ -273,10 +439,11 @@ async def get_preferences(session: AsyncSession = Depends(get_session)):
 @router.put("/preferences", response_model=PortfolioPreferences)
 async def update_preferences(
     payload: PortfolioPreferences,
+    portfolio_id: str | None = Query(None),
     session: AsyncSession = Depends(get_session),
 ):
     """Update portfolio preferences (risk appetite, goals, allocation, rules)."""
-    portfolio = await _get_active_portfolio(session)
+    portfolio = await _get_portfolio(session, portfolio_id)
     data = payload.model_dump()
     # Serialize allocation_targets as list of dicts for JSON storage
     data["allocation_targets"] = [t.model_dump() if hasattr(t, 'model_dump') else t for t in payload.allocation_targets]
@@ -285,9 +452,12 @@ async def update_preferences(
 
 
 @router.get("/risk", response_model=RiskMetrics)
-async def get_risk_metrics(session: AsyncSession = Depends(get_session)):
+async def get_risk_metrics(
+    portfolio_id: str | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+):
     """Get portfolio risk metrics (VaR, volatility, concentration, etc.)."""
-    portfolio = await _get_active_portfolio(session)
+    portfolio = await _get_portfolio(session, portfolio_id)
 
     result = await session.execute(
         select(PositionModel).where(PositionModel.portfolio_id == portfolio.id)
@@ -325,9 +495,12 @@ async def get_risk_metrics(session: AsyncSession = Depends(get_session)):
 
 
 @router.post("/rebalance", response_model=RebalanceResult)
-async def trigger_rebalance(session: AsyncSession = Depends(get_session)):
+async def trigger_rebalance(
+    portfolio_id: str | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+):
     """Trigger a rebalancing check against target allocation."""
-    portfolio = await _get_active_portfolio(session)
+    portfolio = await _get_portfolio(session, portfolio_id)
     prefs = portfolio.preferences or {}
     target_alloc = prefs.get("target_allocation", {})
 
@@ -361,9 +534,12 @@ async def trigger_rebalance(session: AsyncSession = Depends(get_session)):
 
 
 @router.get("/performance", response_model=PerformanceMetrics)
-async def get_performance(session: AsyncSession = Depends(get_session)):
+async def get_performance(
+    portfolio_id: str | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+):
     """Get portfolio performance metrics (returns, sharpe, drawdown, etc.)."""
-    portfolio = await _get_active_portfolio(session)
+    portfolio = await _get_portfolio(session, portfolio_id)
 
     total_pnl = portfolio.pnl or 0
     total_val = portfolio.total_value or 1_000_000
@@ -389,9 +565,12 @@ async def get_performance(session: AsyncSession = Depends(get_session)):
 
 
 @router.get("/allocation", response_model=AllocationBreakdown)
-async def get_allocation(session: AsyncSession = Depends(get_session)):
+async def get_allocation(
+    portfolio_id: str | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+):
     """Get current vs target allocation breakdown by asset class, sector, geography."""
-    portfolio = await _get_active_portfolio(session)
+    portfolio = await _get_portfolio(session, portfolio_id)
     prefs = portfolio.preferences or {}
     # Read from new allocation_targets format, fall back to legacy target_allocation
     alloc_targets = prefs.get("allocation_targets")
@@ -443,99 +622,91 @@ async def get_allocation(session: AsyncSession = Depends(get_session)):
 # ---------------------------------------------------------------------------
 
 
-class InitializeRequest(BaseModel):
-    initial_amount: float = Field(1_000_000, gt=0, description="Starting capital in USD")
-
-
-class ProposedHolding(BaseModel):
-    ticker: str
-    name: str
-    asset_class: str
-    sub_class: str
-    instrument: str
-    direction: str
-    quantity: float
-    price: float
-    fill_price: float
-    market_value: float
-    weight: float
-    trading_cost: dict[str, float]
-
-
-class ProposedTrade(BaseModel):
-    ticker: str
-    name: str
-    direction: str
-    instrument: str
-    quantity: float
-    price: float
-    fill_price: float
-    notional: float
-    spread_cost: float
-    impact_cost: float
-    commission: float
-    sec_fee: float
-    total_cost: float
-    slippage_pct: float
-
-
-class PortfolioProposal(BaseModel):
-    initial_amount: float
-    total_value: float
-    total_invested: float
-    cash: float
-    total_trading_cost: float
-    num_positions: int
-    holdings: list[ProposedHolding]
-    trades: list[ProposedTrade]
-    allocation_summary: dict[str, float]
-    risk_appetite: str
-    strategy_notes: list[str]
-
-
-class TweakRequest(BaseModel):
-    """User can tweak individual holdings before approving."""
-    initial_amount: float = Field(1_000_000, gt=0)
-    holdings: list[dict[str, Any]] = Field(
-        ..., description="Modified holdings list with ticker, quantity, etc."
-    )
-
-
-class ApproveRequest(BaseModel):
-    """User approves the proposal to execute."""
-    initial_amount: float = Field(1_000_000, gt=0)
-    holdings: list[dict[str, Any]]
-
-
-class ApproveResult(BaseModel):
-    success: bool
-    portfolio_id: str
-    positions_created: int
-    trades_created: int
-    total_value: float
-    cash: float
-    total_invested: float
-    total_trading_cost: float
-    message: str
-
-
-@router.post("/initialize", response_model=PortfolioProposal)
+@router.post("/initialize", response_model=InitializeResult)
 async def initialize_portfolio(
     payload: InitializeRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    """Initialize (or restart) a portfolio.
+    """Create a new portfolio shell (or reinitialize an existing one).
 
-    Fetches last close prices, generates an optimal allocation proposal using
-    core-satellite + risk parity approach, and returns the proposal for user
-    review before execution.
+    If portfolio_id is provided, resets that portfolio's cash/values.
+    Otherwise creates a new portfolio record. Enforces MAX_PORTFOLIOS limit
+    on non-paused portfolios.
+    Does NOT generate a proposal -- call POST /generate-proposal next.
     """
-    # Load existing portfolio preferences, or use defaults
-    result = await session.execute(
-        select(Portfolio).where(Portfolio.status == PortfolioStatus.ACTIVE).limit(1)
+    if payload.portfolio_id:
+        # Reinitialize existing portfolio
+        portfolio = await _get_portfolio_by_id(session, payload.portfolio_id)
+        # Delete existing positions for restart
+        await session.execute(
+            delete(PositionModel).where(PositionModel.portfolio_id == portfolio.id)
+        )
+        portfolio.name = payload.name
+        portfolio.total_value = payload.initial_amount
+        portfolio.cash = payload.initial_amount
+        portfolio.invested = 0
+        portfolio.pnl = 0
+        portfolio.pnl_pct = 0
+        portfolio.status = PortfolioStatus.ACTIVE
+
+        return InitializeResult(
+            portfolio_id=portfolio.id,
+            name=portfolio.name,
+            initial_amount=payload.initial_amount,
+            message="Portfolio reinitialized successfully.",
+        )
+
+    # Creating a new portfolio -- enforce limit
+    count_result = await session.execute(
+        select(func.count())
+        .select_from(Portfolio)
+        .where(Portfolio.status != PortfolioStatus.PAUSED)
     )
-    portfolio = result.scalar_one_or_none()
-    preferences = (portfolio.preferences if portfolio else None) or {}
+    active_count = count_result.scalar() or 0
+    if active_count >= MAX_PORTFOLIOS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Maximum of {MAX_PORTFOLIOS} active portfolios reached. "
+                   "Pause or delete an existing portfolio first.",
+        )
+
+    portfolio = Portfolio(
+        id=str(uuid4()),
+        name=payload.name,
+        description="AI Hedge Fund Paper Trading Portfolio",
+        status=PortfolioStatus.ACTIVE,
+        total_value=payload.initial_amount,
+        cash=payload.initial_amount,
+        invested=0,
+        pnl=0,
+        pnl_pct=0,
+        preferences={},
+    )
+    session.add(portfolio)
+    await session.flush()
+
+    return InitializeResult(
+        portfolio_id=portfolio.id,
+        name=portfolio.name,
+        initial_amount=payload.initial_amount,
+        message="Portfolio created successfully. Call POST /generate-proposal to get an allocation proposal.",
+    )
+
+
+@router.post("/generate-proposal", response_model=PortfolioProposal)
+async def generate_portfolio_proposal(
+    payload: GenerateProposalRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Generate an allocation proposal for a given portfolio.
+
+    Reads that portfolio's preferences, fetches latest prices, and generates
+    an optimal allocation proposal using core-satellite + risk parity approach.
+    Returns the proposal for user review before execution.
+    """
+    portfolio = await _get_portfolio_by_id(session, payload.portfolio_id)
+    preferences = portfolio.preferences or {}
+    initial_amount = portfolio.cash or portfolio.total_value or 1_000_000
 
     # Gather all tickers from the universe
     all_tickers: list[str] = []
@@ -546,9 +717,9 @@ async def initialize_portfolio(
     prices = await fetch_last_close_prices(all_tickers)
 
     # Generate proposal
-    proposal = generate_proposal(payload.initial_amount, preferences, prices)
+    proposal = generate_proposal(initial_amount, preferences, prices)
 
-    return PortfolioProposal(**proposal)
+    return PortfolioProposal(portfolio_id=portfolio.id, **proposal)
 
 
 @router.post("/propose", response_model=PortfolioProposal)
@@ -560,6 +731,8 @@ async def propose_portfolio(
 
     Accepts a modified holdings list and recalculates weights, costs, and totals.
     """
+    portfolio = await _get_portfolio_by_id(session, payload.portfolio_id)
+
     # Get prices for all tickers in the tweaked holdings
     tickers = [h["ticker"] for h in payload.holdings]
     prices = await fetch_last_close_prices(tickers)
@@ -633,6 +806,7 @@ async def propose_portfolio(
     }
 
     return PortfolioProposal(
+        portfolio_id=portfolio.id,
         initial_amount=payload.initial_amount,
         total_value=round(total_value, 2),
         total_invested=round(total_invested, 2),
@@ -666,28 +840,14 @@ async def approve_portfolio(
 
     Creates/resets the portfolio, creates position records at fill prices,
     and creates trade records with trading cost metadata.
+    Requires portfolio_id -- only modifies that specific portfolio.
     """
-    # Find or create portfolio
-    result = await session.execute(
-        select(Portfolio).where(Portfolio.status == PortfolioStatus.ACTIVE).limit(1)
-    )
-    portfolio = result.scalar_one_or_none()
+    portfolio = await _get_portfolio_by_id(session, payload.portfolio_id)
 
-    if portfolio:
-        # Delete existing positions for restart
-        await session.execute(
-            delete(PositionModel).where(PositionModel.portfolio_id == portfolio.id)
-        )
-    else:
-        portfolio = Portfolio(
-            id=str(uuid4()),
-            name="Paper Portfolio",
-            description="AI Hedge Fund Paper Trading Portfolio",
-            status=PortfolioStatus.ACTIVE,
-            preferences={},
-        )
-        session.add(portfolio)
-        await session.flush()
+    # Delete existing positions for this portfolio
+    await session.execute(
+        delete(PositionModel).where(PositionModel.portfolio_id == portfolio.id)
+    )
 
     total_invested = 0.0
     total_trading_cost = 0.0

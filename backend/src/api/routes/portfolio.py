@@ -377,7 +377,7 @@ async def get_portfolio_overview(
     )
     positions_count = count_result.scalar() or 0
 
-    return PortfolioOverview(
+    result = PortfolioOverview(
         total_value=portfolio.total_value or 0,
         cash=portfolio.cash or 0,
         invested=portfolio.invested or 0,
@@ -388,6 +388,11 @@ async def get_portfolio_overview(
         positions_count=positions_count,
         last_updated=_dt_iso(portfolio.updated_at),
     )
+    logger.info(
+        "Overview for portfolio %s: invested=%.2f, positions=%d, total_value=%.2f",
+        portfolio.id, result.invested, result.positions_count, result.total_value,
+    )
+    return result
 
 
 @router.get("/positions", response_model=list[Position])
@@ -943,6 +948,23 @@ async def approve_portfolio(
     # (The get_session cleanup commit runs AFTER the response is sent,
     # which creates a race condition with the frontend redirect.)
     await session.commit()
+
+    logger.info(
+        "Portfolio %s approved: %d positions, %d trades, invested=%.2f, cash=%.2f, total=%.2f",
+        portfolio.id, positions_created, trades_created, total_invested, cash, total_value,
+    )
+
+    # Verify the commit worked by counting positions in a fresh query
+    verify_result = await session.execute(
+        select(func.count()).select_from(PositionModel).where(
+            PositionModel.portfolio_id == portfolio.id
+        )
+    )
+    verified_count = verify_result.scalar() or 0
+    logger.info(
+        "Post-commit verification: %d positions found for portfolio %s",
+        verified_count, portfolio.id,
+    )
 
     return ApproveResult(
         success=True,

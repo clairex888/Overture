@@ -68,6 +68,7 @@ async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> 
   const res = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
     headers,
+    cache: 'no-store',
   });
   if (!res.ok) {
     const errorBody = await res.text().catch(() => '');

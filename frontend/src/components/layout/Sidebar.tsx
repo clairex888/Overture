@@ -13,6 +13,7 @@ import {
   Activity,
   Settings,
   Sliders,
+  BarChart3,
 } from 'lucide-react';
 
 const navItems = [
@@ -29,6 +30,7 @@ const navItems = [
     icon: Briefcase,
     children: [{ href: '/portfolio/preferences', label: 'Preferences' }],
   },
+  { href: '/asset/NVDA', label: 'Asset Detail', icon: BarChart3 },
   { href: '/trades', label: 'Trades', icon: ArrowLeftRight },
   { href: '/agents', label: 'Agents', icon: Bot },
   { href: '/knowledge', label: 'Knowledge', icon: BookOpen },
@@ -63,7 +65,9 @@ export default function Sidebar() {
           const isActive =
             item.href === '/'
               ? pathname === '/'
-              : pathname.startsWith(item.href);
+              : item.href.startsWith('/asset/')
+                ? pathname.startsWith('/asset/')
+                : pathname.startsWith(item.href);
           const Icon = item.icon;
 
           return (

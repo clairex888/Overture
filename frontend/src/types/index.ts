@@ -268,6 +268,72 @@ export interface ReplayBufferStats {
   samples_per_second: number;
 }
 
+// Asset Detail types
+export interface AssetInfo {
+  symbol: string;
+  name: string | null;
+  asset_class: string;
+  sector: string | null;
+  industry: string | null;
+  price: number | null;
+  previous_close: number | null;
+  change: number | null;
+  change_pct: number | null;
+  open: number | null;
+  day_high: number | null;
+  day_low: number | null;
+  volume: number | null;
+  avg_volume: number | null;
+  market_cap: number | null;
+  pe_ratio: number | null;
+  forward_pe: number | null;
+  dividend_yield: number | null;
+  beta: number | null;
+  fifty_two_week_high: number | null;
+  fifty_two_week_low: number | null;
+  eps: number | null;
+  description: string | null;
+  updated_at: string;
+}
+
+export interface NewsItem {
+  title: string;
+  source: string;
+  url: string;
+  published_at: string | null;
+  summary: string | null;
+  tickers: string[];
+  sentiment: number | null;
+}
+
+export interface SocialPost {
+  title: string;
+  content: string;
+  source: string;
+  url: string;
+  author: string | null;
+  score: number;
+  comments: number;
+  published_at: string | null;
+  sentiment: string | null;
+}
+
+export interface AssetSummary {
+  symbol: string;
+  name: string | null;
+  price: number | null;
+  change_pct: number | null;
+  short_term_outlook: string;
+  medium_term_outlook: string;
+  key_factors: string[];
+  risks: string[];
+  opportunities: string[];
+  news_sentiment: string;
+  social_sentiment: string;
+  summary: string;
+  updated_at: string;
+}
+
 export interface AssetAllocationTarget {
   asset_class: string;
   target_weight: number;

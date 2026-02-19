@@ -21,6 +21,10 @@ import type {
   AgentRLStats,
   RLEpisode,
   ReplayBufferStats,
+  AssetInfo,
+  NewsItem,
+  SocialPost,
+  AssetSummary,
 } from '@/types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -197,6 +201,14 @@ export const marketDataAPI = {
     fetchAPI<Record<string, any>>(`/api/market-data/watchlist/${assetClass}`),
   watchlists: () =>
     fetchAPI<Record<string, string[]>>('/api/market-data/watchlists'),
+  info: (symbol: string) =>
+    fetchAPI<AssetInfo>(`/api/market-data/info/${symbol}`),
+  news: (symbol: string) =>
+    fetchAPI<NewsItem[]>(`/api/market-data/news/${symbol}`),
+  social: (symbol: string) =>
+    fetchAPI<SocialPost[]>(`/api/market-data/social/${symbol}`),
+  summary: (symbol: string) =>
+    fetchAPI<AssetSummary>(`/api/market-data/summary/${symbol}`),
 };
 
 // Seed API

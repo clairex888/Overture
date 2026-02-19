@@ -128,7 +128,7 @@ export const portfolioAPI = {
   list: () => fetchAPI<PortfolioListItem[]>('/api/portfolio/list'),
   overview: (portfolioId?: string) => {
     const qs = portfolioId ? `?portfolio_id=${portfolioId}` : '';
-    return fetchAPI<PortfolioOverview>(`/api/portfolio${qs}`);
+    return fetchAPI<PortfolioOverview>(`/api/portfolio/${qs}`);
   },
   positions: (portfolioId?: string) => {
     const qs = portfolioId ? `?portfolio_id=${portfolioId}` : '';

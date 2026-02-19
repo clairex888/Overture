@@ -885,7 +885,7 @@ function PortfolioPageInner() {
         <>
           {dataLoading ? (
             <LoadingSkeleton />
-          ) : overview.positions_count === 0 && overview.invested === 0 ? (
+          ) : overview.positions_count === 0 && overview.invested === 0 && positions.length === 0 ? (
             /* Empty portfolio — guide user to set preferences and generate proposal */
             <div className="card max-w-lg mx-auto text-center py-12">
               <div className="w-12 h-12 rounded-xl bg-accent/10 flex items-center justify-center mx-auto mb-4">

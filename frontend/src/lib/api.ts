@@ -25,17 +25,45 @@ import type {
   NewsItem,
   SocialPost,
   AssetSummary,
+  AuthResponse,
+  UserProfile,
 } from '@/types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+// Token management
+let _token: string | null = null;
+
+export function setAuthToken(token: string | null) {
+  _token = token;
+  if (token) {
+    if (typeof window !== 'undefined') localStorage.setItem('overture_token', token);
+  } else {
+    if (typeof window !== 'undefined') localStorage.removeItem('overture_token');
+  }
+}
+
+export function getAuthToken(): string | null {
+  if (_token) return _token;
+  if (typeof window !== 'undefined') {
+    _token = localStorage.getItem('overture_token');
+  }
+  return _token;
+}
+
 async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const token = getAuthToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options?.headers as Record<string, string>),
+  };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${API_BASE}${endpoint}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
     ...options,
+    headers,
   });
   if (!res.ok) {
     const errorBody = await res.text().catch(() => '');
@@ -43,6 +71,21 @@ async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> 
   }
   return res.json();
 }
+
+// Auth API
+export const authAPI = {
+  register: (email: string, password: string, displayName?: string) =>
+    fetchAPI<AuthResponse>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ email, password, display_name: displayName }),
+    }),
+  login: (email: string, password: string) =>
+    fetchAPI<AuthResponse>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
+  me: () => fetchAPI<UserProfile>('/api/auth/me'),
+};
 
 // Ideas API
 export const ideasAPI = {
@@ -201,14 +244,14 @@ export const marketDataAPI = {
     fetchAPI<Record<string, any>>(`/api/market-data/watchlist/${assetClass}`),
   watchlists: () =>
     fetchAPI<Record<string, string[]>>('/api/market-data/watchlists'),
-  info: (symbol: string) =>
-    fetchAPI<AssetInfo>(`/api/market-data/info/${symbol}`),
-  news: (symbol: string) =>
-    fetchAPI<NewsItem[]>(`/api/market-data/news/${symbol}`),
-  social: (symbol: string) =>
-    fetchAPI<SocialPost[]>(`/api/market-data/social/${symbol}`),
-  summary: (symbol: string) =>
-    fetchAPI<AssetSummary>(`/api/market-data/summary/${symbol}`),
+  info: (symbol: string, refresh = false) =>
+    fetchAPI<AssetInfo>(`/api/market-data/info/${symbol}${refresh ? '?refresh=true' : ''}`),
+  news: (symbol: string, refresh = false) =>
+    fetchAPI<NewsItem[]>(`/api/market-data/news/${symbol}${refresh ? '?refresh=true' : ''}`),
+  social: (symbol: string, refresh = false) =>
+    fetchAPI<SocialPost[]>(`/api/market-data/social/${symbol}${refresh ? '?refresh=true' : ''}`),
+  summary: (symbol: string, refresh = false) =>
+    fetchAPI<AssetSummary>(`/api/market-data/summary/${symbol}${refresh ? '?refresh=true' : ''}`),
 };
 
 // Seed API

@@ -1,3 +1,19 @@
+// Auth types
+export interface UserProfile {
+  id: string;
+  email: string;
+  display_name: string | null;
+  role: string;
+  is_active: boolean;
+  portfolio_id: string | null;
+  created_at: string;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: UserProfile;
+}
+
 // Core types matching backend API response schemas
 
 export interface Ticker {
@@ -294,6 +310,8 @@ export interface AssetInfo {
   eps: number | null;
   description: string | null;
   updated_at: string;
+  fetched_at: string | null;
+  cached: boolean;
 }
 
 export interface NewsItem {
@@ -332,6 +350,8 @@ export interface AssetSummary {
   social_sentiment: string;
   summary: string;
   updated_at: string;
+  fetched_at: string | null;
+  cached: boolean;
 }
 
 export interface AssetAllocationTarget {

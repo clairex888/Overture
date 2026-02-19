@@ -95,16 +95,43 @@ class AllocationBreakdown(BaseModel):
     last_updated: str
 
 
+class AssetAllocationTarget(BaseModel):
+    asset_class: str
+    target_weight: float
+
+
 class PortfolioPreferences(BaseModel):
+    """Matches frontend PortfolioPreferences interface exactly."""
+    # Portfolio Goals
+    target_annual_return: float = Field(12, ge=0, le=50)
+    max_drawdown_tolerance: float = Field(15, ge=0, le=50)
+    investment_horizon: str = Field("medium_term", description="short_term, medium_term, long_term")
+    benchmark: str = Field("SPY")
+
+    # Asset Allocation Targets
+    allocation_targets: list[AssetAllocationTarget] = Field(default_factory=lambda: [
+        AssetAllocationTarget(asset_class="equities", target_weight=50),
+        AssetAllocationTarget(asset_class="fixed_income", target_weight=20),
+        AssetAllocationTarget(asset_class="crypto", target_weight=10),
+        AssetAllocationTarget(asset_class="commodities", target_weight=10),
+        AssetAllocationTarget(asset_class="cash", target_weight=10),
+    ])
+
+    # Risk Parameters
     risk_appetite: str = Field("moderate", description="conservative, moderate, aggressive")
-    target_annual_return: float = Field(0.12, ge=0, le=1)
-    max_drawdown_tolerance: float = Field(0.15, ge=0, le=1)
-    target_allocation: dict[str, float] | None = None
+    max_position_size: float = Field(10, ge=1, le=50)
+    concentration_limit: float = Field(30, ge=10, le=100)
+    stop_loss_pct: float = Field(5, ge=0, le=50)
+
+    # Constraints & Rules
     excluded_sectors: list[str] = Field(default_factory=list)
     excluded_tickers: list[str] = Field(default_factory=list)
-    max_single_position_pct: float = Field(0.10, ge=0, le=1)
-    rebalance_frequency: str = Field("weekly", description="daily, weekly, monthly")
-    views: dict[str, Any] = Field(default_factory=dict, description="User market views")
+    hard_rules: str = Field("")
+
+    # Rebalance Schedule
+    rebalance_frequency: str = Field("monthly", description="daily, weekly, monthly, quarterly")
+    drift_tolerance: float = Field(5, ge=1, le=20)
+    auto_rebalance: bool = Field(False)
 
 
 class RebalanceResult(BaseModel):
@@ -222,17 +249,13 @@ async def get_preferences(session: AsyncSession = Depends(get_session)):
     """Get current portfolio preferences."""
     portfolio = await _get_active_portfolio(session)
     prefs = portfolio.preferences or {}
-    return PortfolioPreferences(**{
-        "risk_appetite": prefs.get("risk_appetite", "moderate"),
-        "target_annual_return": prefs.get("target_annual_return", 0.12),
-        "max_drawdown_tolerance": prefs.get("max_drawdown_tolerance", 0.15),
-        "target_allocation": prefs.get("target_allocation"),
-        "excluded_sectors": prefs.get("excluded_sectors", []),
-        "excluded_tickers": prefs.get("excluded_tickers", []),
-        "max_single_position_pct": prefs.get("max_single_position_pct", 0.10),
-        "rebalance_frequency": prefs.get("rebalance_frequency", "weekly"),
-        "views": prefs.get("views", {}),
-    })
+
+    # Build with defaults for any missing fields (backward compat with old data)
+    try:
+        return PortfolioPreferences(**prefs)
+    except Exception:
+        # If stored prefs don't match new schema, return defaults
+        return PortfolioPreferences()
 
 
 @router.put("/preferences", response_model=PortfolioPreferences)
@@ -240,10 +263,13 @@ async def update_preferences(
     payload: PortfolioPreferences,
     session: AsyncSession = Depends(get_session),
 ):
-    """Update portfolio preferences (risk appetite, goals, views)."""
+    """Update portfolio preferences (risk appetite, goals, allocation, rules)."""
     portfolio = await _get_active_portfolio(session)
-    portfolio.preferences = payload.model_dump()
-    return PortfolioPreferences(**portfolio.preferences)
+    data = payload.model_dump()
+    # Serialize allocation_targets as list of dicts for JSON storage
+    data["allocation_targets"] = [t.model_dump() if hasattr(t, 'model_dump') else t for t in payload.allocation_targets]
+    portfolio.preferences = data
+    return payload
 
 
 @router.get("/risk", response_model=RiskMetrics)
@@ -355,13 +381,18 @@ async def get_allocation(session: AsyncSession = Depends(get_session)):
     """Get current vs target allocation breakdown by asset class, sector, geography."""
     portfolio = await _get_active_portfolio(session)
     prefs = portfolio.preferences or {}
-    target_alloc = prefs.get("target_allocation", {
-        "equities": 0.45,
-        "fixed_income": 0.20,
-        "crypto": 0.15,
-        "commodities": 0.05,
-        "cash": 0.15,
-    })
+    # Read from new allocation_targets format, fall back to legacy target_allocation
+    alloc_targets = prefs.get("allocation_targets")
+    if alloc_targets and isinstance(alloc_targets, list):
+        target_alloc = {t["asset_class"]: t["target_weight"] / 100.0 for t in alloc_targets}
+    else:
+        target_alloc = prefs.get("target_allocation", {
+            "equities": 0.45,
+            "fixed_income": 0.20,
+            "crypto": 0.15,
+            "commodities": 0.05,
+            "cash": 0.15,
+        })
 
     result = await session.execute(
         select(PositionModel).where(PositionModel.portfolio_id == portfolio.id)

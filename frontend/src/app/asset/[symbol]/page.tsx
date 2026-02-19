@@ -21,6 +21,8 @@ import {
   ThumbsDown,
   ArrowUpRight,
   ArrowDownRight,
+  RefreshCw,
+  Clock,
 } from 'lucide-react';
 import { marketDataAPI, portfolioAPI } from '@/lib/api';
 import type { AssetInfo, NewsItem, SocialPost, AssetSummary, Position } from '@/types';
@@ -56,16 +58,21 @@ export default function AssetDetailPage() {
   const [social, setSocial] = useState<SocialPost[]>([]);
   const [summary, setSummary] = useState<AssetSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'news' | 'social' | 'summary'>('overview');
 
-  const fetchAssetData = useCallback(async (sym: string) => {
-    setLoading(true);
+  const fetchAssetData = useCallback(async (sym: string, refresh = false) => {
+    if (refresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     try {
       const [infoData, newsData, socialData, summaryData] = await Promise.all([
-        marketDataAPI.info(sym).catch(() => null),
-        marketDataAPI.news(sym).catch(() => []),
-        marketDataAPI.social(sym).catch(() => []),
-        marketDataAPI.summary(sym).catch(() => null),
+        marketDataAPI.info(sym, refresh).catch(() => null),
+        marketDataAPI.news(sym, refresh).catch(() => []),
+        marketDataAPI.social(sym, refresh).catch(() => []),
+        marketDataAPI.summary(sym, refresh).catch(() => null),
       ]);
       setInfo(infoData);
       setNews(newsData);
@@ -73,8 +80,15 @@ export default function AssetDetailPage() {
       setSummary(summaryData);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
+
+  const handleRefresh = () => {
+    if (symbol && !refreshing) {
+      fetchAssetData(symbol, true);
+    }
+  };
 
   useEffect(() => {
     portfolioAPI.positions().catch(() => []).then(setPositions);
@@ -207,6 +221,40 @@ export default function AssetDetailPage() {
                 </div>
               )}
             </div>
+          </div>
+
+          {/* Cache status bar */}
+          <div className="flex items-center justify-between px-4 py-2 rounded-lg bg-dark-800 border border-white/[0.06]">
+            <div className="flex items-center gap-2 text-xs text-text-muted">
+              <Clock className="w-3.5 h-3.5" />
+              {info?.cached ? (
+                <span>
+                  Cached data from{' '}
+                  <span className="text-text-secondary font-medium">
+                    {info.fetched_at ? new Date(info.fetched_at).toLocaleString() : 'unknown'}
+                  </span>
+                </span>
+              ) : (
+                <span>
+                  Fetched live at{' '}
+                  <span className="text-text-secondary font-medium">
+                    {info?.fetched_at ? new Date(info.fetched_at).toLocaleString() : info?.updated_at ? new Date(info.updated_at).toLocaleString() : 'just now'}
+                  </span>
+                </span>
+              )}
+            </div>
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                refreshing
+                  ? 'bg-dark-600 text-text-muted cursor-not-allowed'
+                  : 'bg-info/10 text-info hover:bg-info/20'
+              }`}
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+              {refreshing ? 'Refreshing...' : 'Refresh'}
+            </button>
           </div>
 
           {/* Tabs */}

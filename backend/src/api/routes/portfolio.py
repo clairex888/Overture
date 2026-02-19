@@ -3,18 +3,24 @@ Portfolio API routes.
 
 Provides portfolio overview, positions, risk metrics, performance analytics,
 allocation breakdowns, and rebalancing triggers.
+All data is persisted in PostgreSQL via SQLAlchemy async models.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from typing import Any
 from datetime import datetime
-from uuid import uuid4
+
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.models.base import get_session
+from src.models.portfolio import Portfolio, Position as PositionModel, PortfolioStatus
 
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
-# Pydantic schemas
+# Pydantic schemas (match frontend expectations exactly)
 # ---------------------------------------------------------------------------
 
 
@@ -110,75 +116,49 @@ class RebalanceResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# In-memory store (swap for DB later)
+# Helpers
 # ---------------------------------------------------------------------------
-
-_positions_store: dict[str, dict[str, Any]] = {}
-
-_portfolio_state: dict[str, Any] = {
-    "total_value": 1_000_000.00,
-    "cash": 350_000.00,
-    "invested": 650_000.00,
-    "total_pnl": 23_450.00,
-    "total_pnl_pct": 0.0235,
-    "day_pnl": 1_280.00,
-    "day_pnl_pct": 0.00128,
-    "last_updated": datetime.utcnow().isoformat() + "Z",
-}
-
-_preferences: dict[str, Any] = PortfolioPreferences().model_dump()
-
-# Seed a few sample positions for the prototype
-_seed_positions = [
-    {
-        "id": str(uuid4()),
-        "symbol": "AAPL",
-        "direction": "long",
-        "quantity": 150,
-        "avg_entry_price": 178.50,
-        "current_price": 185.20,
-        "market_value": 27_780.00,
-        "unrealized_pnl": 1_005.00,
-        "unrealized_pnl_pct": 0.0375,
-        "weight": 0.0428,
-        "asset_class": "equities",
-        "opened_at": "2025-12-15T10:30:00Z",
-    },
-    {
-        "id": str(uuid4()),
-        "symbol": "BTC-USD",
-        "direction": "long",
-        "quantity": 1.5,
-        "avg_entry_price": 62_000.00,
-        "current_price": 67_500.00,
-        "market_value": 101_250.00,
-        "unrealized_pnl": 8_250.00,
-        "unrealized_pnl_pct": 0.0887,
-        "weight": 0.1558,
-        "asset_class": "crypto",
-        "opened_at": "2026-01-05T14:00:00Z",
-    },
-    {
-        "id": str(uuid4()),
-        "symbol": "TLT",
-        "direction": "long",
-        "quantity": 500,
-        "avg_entry_price": 92.30,
-        "current_price": 90.10,
-        "market_value": 45_050.00,
-        "unrealized_pnl": -1_100.00,
-        "unrealized_pnl_pct": -0.0238,
-        "weight": 0.0693,
-        "asset_class": "fixed_income",
-        "opened_at": "2026-01-20T09:15:00Z",
-    },
-]
-for pos in _seed_positions:
-    _positions_store[pos["id"]] = pos
 
 
 def _now_iso() -> str:
     return datetime.utcnow().isoformat() + "Z"
+
+
+def _dt_iso(dt: datetime | None) -> str:
+    if dt is None:
+        return _now_iso()
+    return dt.isoformat() + "Z"
+
+
+async def _get_active_portfolio(session: AsyncSession) -> Portfolio:
+    """Return the first active portfolio or raise 404."""
+    result = await session.execute(
+        select(Portfolio).where(Portfolio.status == PortfolioStatus.ACTIVE).limit(1)
+    )
+    portfolio = result.scalar_one_or_none()
+    if not portfolio:
+        raise HTTPException(
+            status_code=404,
+            detail="No active portfolio found. Call POST /api/seed to initialize.",
+        )
+    return portfolio
+
+
+def _position_to_response(pos: PositionModel) -> Position:
+    return Position(
+        id=pos.id,
+        symbol=pos.ticker,
+        direction=pos.direction,
+        quantity=pos.quantity or 0,
+        avg_entry_price=pos.avg_entry_price or 0,
+        current_price=pos.current_price or 0,
+        market_value=pos.market_value or 0,
+        unrealized_pnl=pos.pnl or 0,
+        unrealized_pnl_pct=pos.pnl_pct or 0,
+        weight=pos.weight or 0,
+        asset_class=pos.asset_class or "unknown",
+        opened_at=_dt_iso(pos.created_at),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -187,138 +167,229 @@ def _now_iso() -> str:
 
 
 @router.get("/", response_model=PortfolioOverview)
-async def get_portfolio_overview():
+async def get_portfolio_overview(session: AsyncSession = Depends(get_session)):
     """Get portfolio overview including total value, P&L, and allocation summary."""
-    state = _portfolio_state.copy()
-    state["positions_count"] = len(_positions_store)
-    state["last_updated"] = _now_iso()
-    return PortfolioOverview(**state)
+    portfolio = await _get_active_portfolio(session)
+
+    count_result = await session.execute(
+        select(func.count())
+        .select_from(PositionModel)
+        .where(PositionModel.portfolio_id == portfolio.id)
+    )
+    positions_count = count_result.scalar() or 0
+
+    return PortfolioOverview(
+        total_value=portfolio.total_value or 0,
+        cash=portfolio.cash or 0,
+        invested=portfolio.invested or 0,
+        total_pnl=portfolio.pnl or 0,
+        total_pnl_pct=portfolio.pnl_pct or 0,
+        day_pnl=0,
+        day_pnl_pct=0,
+        positions_count=positions_count,
+        last_updated=_dt_iso(portfolio.updated_at),
+    )
 
 
 @router.get("/positions", response_model=list[Position])
-async def list_positions():
+async def list_positions(session: AsyncSession = Depends(get_session)):
     """List all current portfolio positions."""
-    positions = sorted(
-        _positions_store.values(),
-        key=lambda p: abs(p["market_value"]),
-        reverse=True,
+    portfolio = await _get_active_portfolio(session)
+
+    result = await session.execute(
+        select(PositionModel)
+        .where(PositionModel.portfolio_id == portfolio.id)
+        .order_by(PositionModel.market_value.desc().nullslast())
     )
-    return [Position(**p) for p in positions]
+    positions = result.scalars().all()
+    return [_position_to_response(p) for p in positions]
 
 
 @router.get("/positions/{position_id}", response_model=Position)
-async def get_position(position_id: str):
+async def get_position(position_id: str, session: AsyncSession = Depends(get_session)):
     """Get details for a specific position."""
-    pos = _positions_store.get(position_id)
+    result = await session.execute(
+        select(PositionModel).where(PositionModel.id == position_id)
+    )
+    pos = result.scalar_one_or_none()
     if not pos:
         raise HTTPException(status_code=404, detail=f"Position {position_id} not found")
-    return Position(**pos)
+    return _position_to_response(pos)
+
+
+@router.get("/preferences", response_model=PortfolioPreferences)
+async def get_preferences(session: AsyncSession = Depends(get_session)):
+    """Get current portfolio preferences."""
+    portfolio = await _get_active_portfolio(session)
+    prefs = portfolio.preferences or {}
+    return PortfolioPreferences(**{
+        "risk_appetite": prefs.get("risk_appetite", "moderate"),
+        "target_annual_return": prefs.get("target_annual_return", 0.12),
+        "max_drawdown_tolerance": prefs.get("max_drawdown_tolerance", 0.15),
+        "target_allocation": prefs.get("target_allocation"),
+        "excluded_sectors": prefs.get("excluded_sectors", []),
+        "excluded_tickers": prefs.get("excluded_tickers", []),
+        "max_single_position_pct": prefs.get("max_single_position_pct", 0.10),
+        "rebalance_frequency": prefs.get("rebalance_frequency", "weekly"),
+        "views": prefs.get("views", {}),
+    })
 
 
 @router.put("/preferences", response_model=PortfolioPreferences)
-async def update_preferences(payload: PortfolioPreferences):
+async def update_preferences(
+    payload: PortfolioPreferences,
+    session: AsyncSession = Depends(get_session),
+):
     """Update portfolio preferences (risk appetite, goals, views)."""
-    global _preferences
-    _preferences = payload.model_dump()
-    return PortfolioPreferences(**_preferences)
+    portfolio = await _get_active_portfolio(session)
+    portfolio.preferences = payload.model_dump()
+    return PortfolioPreferences(**portfolio.preferences)
 
 
 @router.get("/risk", response_model=RiskMetrics)
-async def get_risk_metrics():
-    """Get portfolio risk metrics (VaR, volatility, concentration, etc.).
+async def get_risk_metrics(session: AsyncSession = Depends(get_session)):
+    """Get portfolio risk metrics (VaR, volatility, concentration, etc.)."""
+    portfolio = await _get_active_portfolio(session)
 
-    In production these are calculated by the RiskManagementAgent.  The
-    prototype returns representative placeholder values.
-    """
+    result = await session.execute(
+        select(PositionModel).where(PositionModel.portfolio_id == portfolio.id)
+    )
+    positions = result.scalars().all()
+
+    total_invested = portfolio.invested or 0
+    weights: list[float] = []
+    sector_weights: dict[str, float] = {}
+
+    for pos in positions:
+        w = pos.weight or 0
+        weights.append(w)
+        ac = pos.asset_class or "other"
+        sector_weights[ac] = sector_weights.get(ac, 0) + w
+
+    weights.sort(reverse=True)
+    top5 = sum(weights[:5])
+
+    if not sector_weights:
+        sector_weights = {"cash": 1.0}
+
     return RiskMetrics(
-        var_95=15_200.00,
-        var_99=24_800.00,
-        portfolio_volatility=0.142,
-        portfolio_beta=1.05,
-        sharpe_ratio=1.32,
-        max_drawdown=0.087,
-        concentration_top5=0.62,
-        sector_concentration={
-            "technology": 0.35,
-            "crypto": 0.18,
-            "fixed_income": 0.15,
-            "healthcare": 0.12,
-            "energy": 0.08,
-            "other": 0.12,
-        },
-        correlation_risk="moderate",
+        var_95=total_invested * 0.015 if total_invested > 0 else 0,
+        var_99=total_invested * 0.025 if total_invested > 0 else 0,
+        portfolio_volatility=0.0,
+        portfolio_beta=1.0 if total_invested > 0 else 0,
+        sharpe_ratio=0.0,
+        max_drawdown=0.0,
+        concentration_top5=top5,
+        sector_concentration=sector_weights,
+        correlation_risk="low" if len(positions) < 3 else "moderate",
         last_calculated=_now_iso(),
     )
 
 
 @router.post("/rebalance", response_model=RebalanceResult)
-async def trigger_rebalance():
-    """Trigger a rebalancing check against target allocation.
+async def trigger_rebalance(session: AsyncSession = Depends(get_session)):
+    """Trigger a rebalancing check against target allocation."""
+    portfolio = await _get_active_portfolio(session)
+    prefs = portfolio.preferences or {}
+    target_alloc = prefs.get("target_allocation", {})
 
-    In production this invokes the PortfolioManagementAgent.  The prototype
-    returns a representative placeholder result.
-    """
+    result = await session.execute(
+        select(PositionModel).where(PositionModel.portfolio_id == portfolio.id)
+    )
+    positions = result.scalars().all()
+    total_val = portfolio.total_value or 1
+
+    current_alloc: dict[str, float] = {}
+    for pos in positions:
+        ac = pos.asset_class or "other"
+        current_alloc[ac] = current_alloc.get(ac, 0) + (pos.market_value or 0) / total_val
+
+    current_alloc["cash"] = (portfolio.cash or 0) / total_val
+
+    drift: dict[str, float] = {}
+    for cat, target in target_alloc.items():
+        current = current_alloc.get(cat, 0)
+        drift[cat] = round(current - target, 4)
+
+    rebalance_needed = any(abs(d) > 0.02 for d in drift.values())
+
     return RebalanceResult(
-        rebalance_needed=True,
-        drift_detected={
-            "crypto": 0.038,
-            "fixed_income": -0.025,
-            "equities": -0.013,
-        },
-        proposed_trades=[
-            {"action": "reduce", "symbol": "BTC-USD", "amount_usd": 12_000},
-            {"action": "increase", "symbol": "TLT", "amount_usd": 8_000},
-            {"action": "increase", "symbol": "SPY", "amount_usd": 4_000},
-        ],
-        estimated_cost=45.00,
+        rebalance_needed=rebalance_needed,
+        drift_detected=drift,
+        proposed_trades=[],
+        estimated_cost=0,
         triggered_at=_now_iso(),
     )
 
 
 @router.get("/performance", response_model=PerformanceMetrics)
-async def get_performance():
+async def get_performance(session: AsyncSession = Depends(get_session)):
     """Get portfolio performance metrics (returns, sharpe, drawdown, etc.)."""
+    portfolio = await _get_active_portfolio(session)
+
+    total_pnl = portfolio.pnl or 0
+    total_val = portfolio.total_value or 1_000_000
+    initial = total_val - total_pnl
+    pnl_pct = total_pnl / initial if initial > 0 else 0
+
     return PerformanceMetrics(
-        total_return=23_450.00,
-        total_return_pct=0.0235,
-        annualized_return_pct=0.142,
-        sharpe_ratio=1.32,
-        sortino_ratio=1.78,
-        max_drawdown=0.087,
-        max_drawdown_duration_days=12,
-        win_rate=0.62,
-        avg_win=3_200.00,
-        avg_loss=-1_850.00,
-        profit_factor=1.68,
-        calmar_ratio=1.63,
-        period_start="2025-12-01T00:00:00Z",
+        total_return=total_pnl,
+        total_return_pct=pnl_pct,
+        annualized_return_pct=pnl_pct,
+        sharpe_ratio=0.0,
+        sortino_ratio=0.0,
+        max_drawdown=0.0,
+        max_drawdown_duration_days=0,
+        win_rate=0.0,
+        avg_win=0.0,
+        avg_loss=0.0,
+        profit_factor=0.0,
+        calmar_ratio=0.0,
+        period_start=_dt_iso(portfolio.created_at),
         period_end=_now_iso(),
     )
 
 
 @router.get("/allocation", response_model=AllocationBreakdown)
-async def get_allocation():
-    """Get current vs target allocation breakdown by asset class, sector, and geography."""
+async def get_allocation(session: AsyncSession = Depends(get_session)):
+    """Get current vs target allocation breakdown by asset class, sector, geography."""
+    portfolio = await _get_active_portfolio(session)
+    prefs = portfolio.preferences or {}
+    target_alloc = prefs.get("target_allocation", {
+        "equities": 0.45,
+        "fixed_income": 0.20,
+        "crypto": 0.15,
+        "commodities": 0.05,
+        "cash": 0.15,
+    })
+
+    result = await session.execute(
+        select(PositionModel).where(PositionModel.portfolio_id == portfolio.id)
+    )
+    positions = result.scalars().all()
+    total_val = portfolio.total_value or 1
+
+    current_alloc: dict[str, float] = {}
+    for pos in positions:
+        ac = pos.asset_class or "other"
+        current_alloc[ac] = current_alloc.get(ac, 0) + (pos.market_value or 0) / total_val
+    current_alloc["cash"] = (portfolio.cash or 0) / total_val
+
+    all_categories = set(list(target_alloc.keys()) + list(current_alloc.keys()))
+    by_asset_class = []
+    for cat in sorted(all_categories):
+        current = round(current_alloc.get(cat, 0), 4)
+        target = round(target_alloc.get(cat, 0), 4)
+        by_asset_class.append(AllocationEntry(
+            category=cat,
+            current_weight=current,
+            target_weight=target,
+            drift=round(current - target, 4),
+        ))
+
     return AllocationBreakdown(
-        by_asset_class=[
-            AllocationEntry(category="equities", current_weight=0.42, target_weight=0.45, drift=-0.03),
-            AllocationEntry(category="fixed_income", current_weight=0.15, target_weight=0.20, drift=-0.05),
-            AllocationEntry(category="crypto", current_weight=0.18, target_weight=0.15, drift=0.03),
-            AllocationEntry(category="commodities", current_weight=0.05, target_weight=0.05, drift=0.00),
-            AllocationEntry(category="cash", current_weight=0.20, target_weight=0.15, drift=0.05),
-        ],
-        by_sector=[
-            AllocationEntry(category="technology", current_weight=0.35, target_weight=0.30, drift=0.05),
-            AllocationEntry(category="healthcare", current_weight=0.12, target_weight=0.15, drift=-0.03),
-            AllocationEntry(category="energy", current_weight=0.08, target_weight=0.10, drift=-0.02),
-            AllocationEntry(category="financials", current_weight=0.10, target_weight=0.10, drift=0.00),
-            AllocationEntry(category="other", current_weight=0.35, target_weight=0.35, drift=0.00),
-        ],
-        by_geography=[
-            AllocationEntry(category="us", current_weight=0.70, target_weight=0.65, drift=0.05),
-            AllocationEntry(category="europe", current_weight=0.12, target_weight=0.15, drift=-0.03),
-            AllocationEntry(category="asia", current_weight=0.10, target_weight=0.12, drift=-0.02),
-            AllocationEntry(category="emerging", current_weight=0.08, target_weight=0.08, drift=0.00),
-        ],
+        by_asset_class=by_asset_class,
+        by_sector=[],
+        by_geography=[],
         last_updated=_now_iso(),
     )

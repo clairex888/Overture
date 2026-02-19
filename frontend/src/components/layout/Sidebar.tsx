@@ -12,12 +12,23 @@ import {
   Brain,
   Activity,
   Settings,
+  Sliders,
 } from 'lucide-react';
 
 const navItems = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/ideas', label: 'Ideas', icon: Lightbulb },
-  { href: '/portfolio', label: 'Portfolio', icon: Briefcase },
+  {
+    href: '/ideas',
+    label: 'Ideas',
+    icon: Lightbulb,
+    children: [{ href: '/ideas/preferences', label: 'Preferences' }],
+  },
+  {
+    href: '/portfolio',
+    label: 'Portfolio',
+    icon: Briefcase,
+    children: [{ href: '/portfolio/preferences', label: 'Preferences' }],
+  },
   { href: '/trades', label: 'Trades', icon: ArrowLeftRight },
   { href: '/agents', label: 'Agents', icon: Bot },
   { href: '/knowledge', label: 'Knowledge', icon: BookOpen },
@@ -56,24 +67,46 @@ export default function Sidebar() {
           const Icon = item.icon;
 
           return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group ${
-                isActive
-                  ? 'bg-info/10 text-info border border-info/20'
-                  : 'text-text-secondary hover:text-text-primary hover:bg-dark-700 border border-transparent'
-              }`}
-            >
-              <Icon
-                className={`w-[18px] h-[18px] ${
+            <div key={item.href}>
+              <Link
+                href={item.href}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group ${
                   isActive
-                    ? 'text-info'
-                    : 'text-text-muted group-hover:text-text-secondary'
+                    ? 'bg-info/10 text-info border border-info/20'
+                    : 'text-text-secondary hover:text-text-primary hover:bg-dark-700 border border-transparent'
                 }`}
-              />
-              {item.label}
-            </Link>
+              >
+                <Icon
+                  className={`w-[18px] h-[18px] ${
+                    isActive
+                      ? 'text-info'
+                      : 'text-text-muted group-hover:text-text-secondary'
+                  }`}
+                />
+                {item.label}
+              </Link>
+              {item.children && isActive && (
+                <div className="ml-7 mt-1 space-y-0.5">
+                  {item.children.map((child) => {
+                    const isChildActive = pathname === child.href;
+                    return (
+                      <Link
+                        key={child.href}
+                        href={child.href}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                          isChildActive
+                            ? 'text-info bg-info/5'
+                            : 'text-text-muted hover:text-text-secondary hover:bg-dark-700'
+                        }`}
+                      >
+                        <Sliders className="w-3.5 h-3.5" />
+                        {child.label}
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           );
         })}
       </nav>

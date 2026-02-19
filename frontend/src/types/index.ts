@@ -267,3 +267,35 @@ export interface ReplayBufferStats {
   max_reward: number;
   samples_per_second: number;
 }
+
+export interface AssetAllocationTarget {
+  asset_class: string;
+  target_weight: number;
+}
+
+export interface PortfolioPreferences {
+  // Portfolio Goals
+  target_annual_return: number;
+  max_drawdown_tolerance: number;
+  investment_horizon: 'short_term' | 'medium_term' | 'long_term';
+  benchmark: string;
+
+  // Asset Allocation Targets
+  allocation_targets: AssetAllocationTarget[];
+
+  // Risk Parameters
+  risk_appetite: 'conservative' | 'moderate' | 'aggressive';
+  max_position_size: number;
+  concentration_limit: number;
+  stop_loss_pct: number;
+
+  // Constraints & Rules
+  excluded_sectors: string[];
+  excluded_tickers: string[];
+  hard_rules: string;
+
+  // Rebalance Schedule
+  rebalance_frequency: 'daily' | 'weekly' | 'monthly' | 'quarterly';
+  drift_tolerance: number;
+  auto_rebalance: boolean;
+}

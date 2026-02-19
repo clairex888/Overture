@@ -10,6 +10,8 @@ import type {
   PerformanceMetrics,
   AllocationBreakdown,
   PortfolioPreferences,
+  PortfolioProposal,
+  ApproveResult,
   AllAgentsStatus,
   AgentLogEntry,
   LoopControlResponse,
@@ -134,6 +136,21 @@ export const portfolioAPI = {
     fetchAPI<PortfolioPreferences>('/api/portfolio/preferences', {
       method: 'PUT',
       body: JSON.stringify(data),
+    }),
+  initialize: (initialAmount: number = 1_000_000) =>
+    fetchAPI<PortfolioProposal>('/api/portfolio/initialize', {
+      method: 'POST',
+      body: JSON.stringify({ initial_amount: initialAmount }),
+    }),
+  propose: (initialAmount: number, holdings: Record<string, any>[]) =>
+    fetchAPI<PortfolioProposal>('/api/portfolio/propose', {
+      method: 'POST',
+      body: JSON.stringify({ initial_amount: initialAmount, holdings }),
+    }),
+  approve: (initialAmount: number, holdings: Record<string, any>[]) =>
+    fetchAPI<ApproveResult>('/api/portfolio/approve', {
+      method: 'POST',
+      body: JSON.stringify({ initial_amount: initialAmount, holdings }),
     }),
 };
 

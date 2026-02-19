@@ -522,6 +522,13 @@ function PortfolioPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
+  // Capture URL params once on mount (immune to URL cleanup race conditions)
+  const initialUrlParamsRef = useRef<{ portfolioId: string | null; approved: boolean }>({
+    portfolioId: null,
+    approved: false,
+  });
+  const urlParamsRead = useRef(false);
+
   // Portfolio list state
   const [portfolios, setPortfolios] = useState<PortfolioListItem[]>([]);
   const [activePortfolioId, setActivePortfolioId] = useState<string>('');
@@ -534,7 +541,8 @@ function PortfolioPageInner() {
   // Monitoring data
   const [sortField, setSortField] = useState<string>('weight');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
-  const [dataLoading, setDataLoading] = useState(false);
+  // Start true so we never flash "Portfolio is empty" before data loads
+  const [dataLoading, setDataLoading] = useState(true);
 
   const [overview, setOverview] = useState<PortfolioOverview>({
     total_value: 0,
@@ -581,19 +589,33 @@ function PortfolioPageInner() {
   // Success banner
   const [showApprovedBanner, setShowApprovedBanner] = useState(false);
 
-  // Check for ?approved=true on mount
+  // Read URL params once on mount into ref, then clean the URL.
+  // Using a ref prevents the URL cleanup (replaceState) from causing
+  // useSearchParams to change → recreating fetchPortfolioList → double-fetch race.
   useEffect(() => {
-    if (searchParams.get('approved') === 'true') {
+    if (urlParamsRead.current) return;
+    urlParamsRead.current = true;
+
+    const pid = searchParams.get('portfolio_id');
+    const approved = searchParams.get('approved') === 'true';
+    initialUrlParamsRef.current = { portfolioId: pid, approved };
+
+    if (approved) {
       setShowApprovedBanner(true);
-      // Clean URL without reloading (remove approved & portfolio_id)
+    }
+
+    // Clean URL without reloading
+    if (pid || approved) {
       const url = new URL(window.location.href);
       url.searchParams.delete('approved');
       url.searchParams.delete('portfolio_id');
       window.history.replaceState({}, '', url.pathname + url.search);
     }
-  }, [searchParams]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Fetch portfolio list on mount
+  // Fetch portfolio list on mount. Uses ref for URL params so this
+  // callback has NO external dependencies and only runs once.
   const fetchPortfolioList = useCallback(async () => {
     setListLoading(true);
     try {
@@ -607,9 +629,10 @@ function PortfolioPageInner() {
         // No portfolios at all — show first-time init modal
         setModalMode('create');
         setModalOpen(true);
+        setDataLoading(false); // nothing to load
       } else {
-        // If a portfolio_id is in the URL, prefer that one
-        const urlPortfolioId = searchParams.get('portfolio_id');
+        // Use the ref-captured URL param (immune to URL cleanup race)
+        const { portfolioId: urlPortfolioId, approved } = initialUrlParamsRef.current;
         const targetFromUrl = urlPortfolioId ? list.find((p) => p.id === urlPortfolioId) : null;
 
         setActivePortfolioId((prev) => {
@@ -621,9 +644,9 @@ function PortfolioPageInner() {
           return withPositions ? withPositions.id : list[0].id;
         });
 
-        // If ALL portfolios are empty (no positions at all), show init popup
-        // This handles the seed portfolio case — user sees it as "first time"
-        if (!hasAnyPositions && !searchParams.get('approved')) {
+        // If ALL portfolios are empty AND we're NOT returning from approval,
+        // show init popup (first-time experience)
+        if (!hasAnyPositions && !approved) {
           setModalMode('create');
           setModalOpen(true);
         }
@@ -633,10 +656,11 @@ function PortfolioPageInner() {
       setPortfolios([]);
       setModalMode('create');
       setModalOpen(true);
+      setDataLoading(false);
     } finally {
       setListLoading(false);
     }
-  }, [searchParams]);
+  }, []);
 
   useEffect(() => {
     fetchPortfolioList();
@@ -679,8 +703,11 @@ function PortfolioPageInner() {
   useEffect(() => {
     if (activePortfolioId) {
       fetchMonitoringData(activePortfolioId);
+    } else if (!listLoading) {
+      // No portfolio selected and list is done loading — nothing to monitor
+      setDataLoading(false);
     }
-  }, [activePortfolioId, fetchMonitoringData]);
+  }, [activePortfolioId, fetchMonitoringData, listLoading]);
 
   // Handlers
   const handlePortfolioChange = (id: string) => {

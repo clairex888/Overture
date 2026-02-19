@@ -28,6 +28,13 @@ class Portfolio(Base):
 
     __tablename__ = "portfolios"
 
+    user_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+        comment="Owner of this portfolio. Nullable for legacy/migration compatibility.",
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     total_value: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0.0)

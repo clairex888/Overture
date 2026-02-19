@@ -21,6 +21,7 @@ import {
   Rocket,
   CheckCircle2,
   RotateCcw,
+  Trash2,
   Plus,
   ChevronDown,
   X,
@@ -713,6 +714,22 @@ function PortfolioPageInner() {
     }
   };
 
+  const handleDeletePortfolio = async () => {
+    if (!activePortfolioId) return;
+    const activeName = portfolios.find((p) => p.id === activePortfolioId)?.name || 'this portfolio';
+    if (!window.confirm(`Delete "${activeName}"? This will remove all positions and cannot be undone.`)) {
+      return;
+    }
+    try {
+      await portfolioAPI.deletePortfolio(activePortfolioId);
+      // Reload the full page data — if no portfolios remain, the init modal will open
+      setActivePortfolioId('');
+      await loadPortfolioPage();
+    } catch (err) {
+      console.error('[Portfolio] Delete failed:', err);
+    }
+  };
+
   // Sorting
   const handleSort = (field: string) => {
     if (sortField === field) {
@@ -841,6 +858,13 @@ function PortfolioPageInner() {
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 Reinitialize
+              </button>
+              <button
+                onClick={handleDeletePortfolio}
+                className="btn-secondary flex items-center gap-2 text-xs text-loss hover:bg-loss/10"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Delete
               </button>
             </>
           )}

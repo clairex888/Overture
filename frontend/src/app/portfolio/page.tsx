@@ -642,23 +642,33 @@ function PortfolioPageInner() {
     fetchPortfolioList();
   }, [fetchPortfolioList]);
 
-  // Fetch monitoring data when active portfolio changes
+  // Fetch monitoring data when active portfolio changes.
+  // Uses allSettled so one failing call (e.g. outlook) doesn't wipe all data.
   const fetchMonitoringData = useCallback(async (portfolioId: string) => {
     if (!portfolioId) return;
     setDataLoading(true);
     try {
-      const [overviewData, positionsData, riskData, allocationData, outlookData] = await Promise.all([
+      const results = await Promise.allSettled([
         portfolioAPI.overview(portfolioId),
         portfolioAPI.positions(portfolioId),
         portfolioAPI.risk(portfolioId),
         portfolioAPI.allocation(portfolioId),
         knowledgeAPI.outlook(),
       ]);
-      setOverview(overviewData);
-      setPositions(positionsData);
-      setRisk(riskData);
-      setAllocation(allocationData);
-      setOutlook(outlookData);
+
+      if (results[0].status === 'fulfilled') setOverview(results[0].value);
+      if (results[1].status === 'fulfilled') setPositions(results[1].value);
+      if (results[2].status === 'fulfilled') setRisk(results[2].value);
+      if (results[3].status === 'fulfilled') setAllocation(results[3].value);
+      if (results[4].status === 'fulfilled') setOutlook(results[4].value);
+
+      // Log any failures for debugging
+      results.forEach((r, i) => {
+        if (r.status === 'rejected') {
+          const names = ['overview', 'positions', 'risk', 'allocation', 'outlook'];
+          console.error(`Failed to fetch ${names[i]}:`, r.reason);
+        }
+      });
     } catch (err) {
       console.error('Failed to fetch portfolio monitoring data:', err);
     } finally {

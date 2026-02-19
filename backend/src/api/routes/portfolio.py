@@ -448,6 +448,7 @@ async def update_preferences(
     # Serialize allocation_targets as list of dicts for JSON storage
     data["allocation_targets"] = [t.model_dump() if hasattr(t, 'model_dump') else t for t in payload.allocation_targets]
     portfolio.preferences = data
+    await session.commit()
     return payload
 
 
@@ -648,6 +649,7 @@ async def initialize_portfolio(
         portfolio.pnl = 0
         portfolio.pnl_pct = 0
         portfolio.status = PortfolioStatus.ACTIVE
+        await session.commit()
 
         return InitializeResult(
             portfolio_id=portfolio.id,
@@ -683,7 +685,7 @@ async def initialize_portfolio(
         preferences={},
     )
     session.add(portfolio)
-    await session.flush()
+    await session.commit()
 
     return InitializeResult(
         portfolio_id=portfolio.id,
@@ -936,6 +938,11 @@ async def approve_portfolio(
     portfolio.invested = total_invested
     portfolio.pnl = 0
     portfolio.pnl_pct = 0
+
+    # Explicit commit so data is visible to subsequent requests immediately.
+    # (The get_session cleanup commit runs AFTER the response is sent,
+    # which creates a race condition with the frontend redirect.)
+    await session.commit()
 
     return ApproveResult(
         success=True,

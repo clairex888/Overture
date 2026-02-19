@@ -134,3 +134,45 @@ async def update_profile(
     if payload.display_name is not None:
         user.display_name = payload.display_name
     return _user_profile(user)
+
+
+class SetupAdminResponse(BaseModel):
+    success: bool
+    message: str
+
+
+@router.post("/setup-admin", response_model=SetupAdminResponse)
+async def setup_admin(session: AsyncSession = Depends(get_session)):
+    """Create or reset the master admin account.
+
+    This is an unauthenticated endpoint intended for initial setup.
+    It always resets the admin password to the default so the account
+    is recoverable even if the JWT secret or hash rounds changed.
+    """
+    result = await session.execute(
+        select(User).where(User.email == "admin@overture.ai")
+    )
+    existing = result.scalar_one_or_none()
+
+    if existing:
+        existing.hashed_password = hash_password("admin123")
+        existing.is_active = True
+        return SetupAdminResponse(
+            success=True,
+            message="Master admin password has been reset.",
+        )
+
+    user = User(
+        id=str(uuid4()),
+        email="admin@overture.ai",
+        hashed_password=hash_password("admin123"),
+        display_name="Master Admin",
+        role=UserRole.ADMIN,
+        is_active=True,
+    )
+    session.add(user)
+    await session.flush()
+    return SetupAdminResponse(
+        success=True,
+        message="Master admin account created.",
+    )

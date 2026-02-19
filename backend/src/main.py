@@ -32,25 +32,36 @@ async def lifespan(app: FastAPI):
         try:
             await _seed_master_user()
         except Exception as exc:
-            logger.warning("Master user seed skipped: %s", exc)
+            logger.error("Master user seed FAILED: %s", exc, exc_info=True)
 
     yield
 
 
 async def _seed_master_user() -> None:
-    """Create the master admin account if it doesn't exist."""
+    """Create or reset the master admin account.
+
+    Resets the password on every startup so the master account always works
+    even if the JWT secret or bcrypt rounds changed between deploys.
+    """
     from sqlalchemy import select
     from src.models.user import User, UserRole
     from src.auth import hash_password
+    from uuid import uuid4
 
     async with async_session_factory() as session:
         result = await session.execute(
             select(User).where(User.email == "admin@overture.ai")
         )
-        if result.scalar_one_or_none():
+        existing = result.scalar_one_or_none()
+
+        if existing:
+            # Reset password on every startup so the master account always works
+            existing.hashed_password = hash_password("admin123")
+            existing.is_active = True
+            await session.commit()
+            logger.info("Master admin password reset: admin@overture.ai")
             return
 
-        from uuid import uuid4
         admin = User(
             id=str(uuid4()),
             email="admin@overture.ai",

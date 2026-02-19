@@ -9,11 +9,14 @@ import {
   Shield,
   Bot,
   Loader2,
+  Power,
+  Database,
+  Zap,
 } from 'lucide-react';
 import StatCard from '@/components/dashboard/StatCard';
 import AlertFeed from '@/components/dashboard/AlertFeed';
 import PortfolioChart from '@/components/charts/PortfolioChart';
-import { alertsAPI, agentsAPI, ideasAPI, portfolioAPI, tradesAPI } from '@/lib/api';
+import { alertsAPI, agentsAPI, ideasAPI, portfolioAPI, tradesAPI, knowledgeAPI } from '@/lib/api';
 import type {
   Alert,
   Idea,
@@ -73,6 +76,56 @@ export default function Dashboard() {
   const [pendingTrades, setPendingTrades] = useState<PendingSummary | null>(null);
   const [activeTrades, setActiveTrades] = useState<ActiveSummary | null>(null);
   const [riskMetrics, setRiskMetrics] = useState<RiskMetrics | null>(null);
+  const [ideaLoopRunning, setIdeaLoopRunning] = useState(false);
+  const [portfolioLoopRunning, setPortfolioLoopRunning] = useState(false);
+  const [togglingIdeaLoop, setTogglingIdeaLoop] = useState(false);
+  const [togglingPortfolioLoop, setTogglingPortfolioLoop] = useState(false);
+  const [togglingPipeline, setTogglingPipeline] = useState(false);
+
+  const toggleIdeaLoop = async () => {
+    setTogglingIdeaLoop(true);
+    try {
+      if (ideaLoopRunning) {
+        await agentsAPI.stopIdeaLoop();
+        setIdeaLoopRunning(false);
+      } else {
+        await agentsAPI.startIdeaLoop();
+        setIdeaLoopRunning(true);
+      }
+    } catch {
+      // revert on error
+    } finally {
+      setTogglingIdeaLoop(false);
+    }
+  };
+
+  const togglePortfolioLoop = async () => {
+    setTogglingPortfolioLoop(true);
+    try {
+      if (portfolioLoopRunning) {
+        await agentsAPI.stopPortfolioLoop();
+        setPortfolioLoopRunning(false);
+      } else {
+        await agentsAPI.startPortfolioLoop();
+        setPortfolioLoopRunning(true);
+      }
+    } catch {
+      // revert on error
+    } finally {
+      setTogglingPortfolioLoop(false);
+    }
+  };
+
+  const triggerDataPipeline = async () => {
+    setTogglingPipeline(true);
+    try {
+      await knowledgeAPI.triggerPipeline();
+    } catch {
+      // ignore
+    } finally {
+      setTogglingPipeline(false);
+    }
+  };
 
   useEffect(() => {
     async function fetchData() {
@@ -102,6 +155,10 @@ export default function Dashboard() {
         setPendingTrades(pendingData);
         setActiveTrades(activeData);
         setRiskMetrics(riskData);
+        if (agentsData) {
+          setIdeaLoopRunning(agentsData.idea_loop_running);
+          setPortfolioLoopRunning(agentsData.portfolio_loop_running);
+        }
       } finally {
         setLoading(false);
       }
@@ -362,6 +419,106 @@ export default function Dashboard() {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      </div>
+
+      {/* System Controls */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+            <Power className="w-4 h-4 text-info" />
+            System Controls
+          </h3>
+          <span className="text-[10px] text-text-muted">Manage loops & token costs</span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Idea Generation Loop */}
+          <div className="p-4 rounded-lg bg-dark-800 border border-white/[0.06]">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <Lightbulb className="w-4 h-4 text-warning" />
+                <span className="text-xs font-semibold text-text-primary">Idea Loop</span>
+              </div>
+              <button
+                onClick={toggleIdeaLoop}
+                disabled={togglingIdeaLoop}
+                className={`relative w-11 h-6 rounded-full transition-colors duration-200 ${
+                  ideaLoopRunning ? 'bg-profit' : 'bg-dark-500'
+                } ${togglingIdeaLoop ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow-md transition-transform duration-200 ${
+                    ideaLoopRunning ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+            <p className="text-[11px] text-text-muted">
+              Auto-generates and validates investment ideas using AI agents. Uses LLM tokens per cycle.
+            </p>
+            <div className="mt-2 flex items-center gap-1.5">
+              <div className={`w-1.5 h-1.5 rounded-full ${ideaLoopRunning ? 'bg-profit animate-pulse-slow' : 'bg-dark-400'}`} />
+              <span className="text-[10px] text-text-muted">{ideaLoopRunning ? 'Running' : 'Stopped'}</span>
+            </div>
+          </div>
+
+          {/* Portfolio Management Loop */}
+          <div className="p-4 rounded-lg bg-dark-800 border border-white/[0.06]">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <Zap className="w-4 h-4 text-accent" />
+                <span className="text-xs font-semibold text-text-primary">Portfolio Loop</span>
+              </div>
+              <button
+                onClick={togglePortfolioLoop}
+                disabled={togglingPortfolioLoop}
+                className={`relative w-11 h-6 rounded-full transition-colors duration-200 ${
+                  portfolioLoopRunning ? 'bg-profit' : 'bg-dark-500'
+                } ${togglingPortfolioLoop ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow-md transition-transform duration-200 ${
+                    portfolioLoopRunning ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+            <p className="text-[11px] text-text-muted">
+              Monitors positions, triggers rebalancing, and manages risk. Uses LLM tokens per cycle.
+            </p>
+            <div className="mt-2 flex items-center gap-1.5">
+              <div className={`w-1.5 h-1.5 rounded-full ${portfolioLoopRunning ? 'bg-profit animate-pulse-slow' : 'bg-dark-400'}`} />
+              <span className="text-[10px] text-text-muted">{portfolioLoopRunning ? 'Running' : 'Stopped'}</span>
+            </div>
+          </div>
+
+          {/* Data Pipeline */}
+          <div className="p-4 rounded-lg bg-dark-800 border border-white/[0.06]">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <Database className="w-4 h-4 text-info" />
+                <span className="text-xs font-semibold text-text-primary">Data Pipeline</span>
+              </div>
+              <button
+                onClick={triggerDataPipeline}
+                disabled={togglingPipeline}
+                className={`px-3 py-1 rounded-md text-[10px] font-medium transition-colors ${
+                  togglingPipeline
+                    ? 'bg-dark-500 text-text-muted cursor-not-allowed'
+                    : 'bg-info/10 text-info hover:bg-info/20 cursor-pointer'
+                }`}
+              >
+                {togglingPipeline ? 'Running...' : 'Run Now'}
+              </button>
+            </div>
+            <p className="text-[11px] text-text-muted">
+              Fetches market data, news, and builds knowledge base. One-time API cost per trigger.
+            </p>
+            <div className="mt-2 flex items-center gap-1.5">
+              <div className="w-1.5 h-1.5 rounded-full bg-dark-400" />
+              <span className="text-[10px] text-text-muted">Manual trigger</span>
+            </div>
           </div>
         </div>
       </div>

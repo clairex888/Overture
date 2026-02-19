@@ -32,7 +32,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 # JWT
 # ---------------------------------------------------------------------------
 
-JWT_SECRET = settings.anthropic_api_key or "overture-dev-secret-change-me"
+JWT_SECRET = settings.jwt_secret
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 72
 

@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     rl_batch_size: int = 64
     rl_learning_rate: float = 0.001
 
+    # Auth
+    jwt_secret: str = "overture-change-me-in-production-2026"
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 

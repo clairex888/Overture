@@ -156,23 +156,6 @@ export default function LoginPage() {
             </button>
           </form>
 
-          {mode === 'login' && (
-            <div className="mt-6 pt-4 border-t border-white/[0.06]">
-              <p className="text-xs text-text-muted text-center">
-                Master account:{' '}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEmail('admin@overture.ai');
-                    setPassword('admin123');
-                  }}
-                  className="text-info hover:underline"
-                >
-                  auto-fill credentials
-                </button>
-              </p>
-            </div>
-          )}
         </div>
       </div>
     </div>

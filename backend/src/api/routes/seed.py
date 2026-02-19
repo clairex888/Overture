@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import uuid4
 
 from src.models.base import get_session
-from src.models.portfolio import Portfolio, PortfolioStatus
 from src.models.idea import Idea, IdeaSource, IdeaStatus, Timeframe
 from src.models.trade import Trade, TradeStatus, TradeDirection, InstrumentType
 from src.models.knowledge import (
@@ -34,56 +33,20 @@ class SeedResult(BaseModel):
 
 
 async def run_seed(session: AsyncSession) -> SeedResult:
-    """Core seed logic, reusable from both API and startup."""
-    # Check if a portfolio already exists
-    result = await session.execute(select(Portfolio).limit(1))
-    existing = result.scalar_one_or_none()
+    """Core seed logic, reusable from both API and startup.
 
-    if existing:
+    Seeds sample ideas, trades, knowledge entries, and market outlooks.
+    Does NOT create a portfolio — users create their own via the init modal.
+    """
+    # Check if seed data already exists (idempotent)
+    result = await session.execute(select(Idea).limit(1))
+    existing_idea = result.scalar_one_or_none()
+
+    if existing_idea:
         return SeedResult(
             success=True,
-            message=f"Portfolio already exists: {existing.name}",
-            portfolio_id=existing.id,
+            message="Database already seeded.",
         )
-
-    # --- Paper Portfolio ($1M) ---
-    portfolio = Portfolio(
-        id=str(uuid4()),
-        name="Paper Portfolio",
-        description="AI Hedge Fund Paper Trading Portfolio - $1M Initial Capital",
-        total_value=1_000_000.0,
-        cash=1_000_000.0,
-        invested=0.0,
-        pnl=0.0,
-        pnl_pct=0.0,
-        risk_score=0.0,
-        preferences={
-            "target_annual_return": 15,
-            "max_drawdown_tolerance": 15,
-            "investment_horizon": "medium_term",
-            "benchmark": "SPY",
-            "allocation_targets": [
-                {"asset_class": "equities", "target_weight": 45},
-                {"asset_class": "fixed_income", "target_weight": 20},
-                {"asset_class": "crypto", "target_weight": 15},
-                {"asset_class": "commodities", "target_weight": 5},
-                {"asset_class": "cash", "target_weight": 15},
-            ],
-            "risk_appetite": "moderate",
-            "max_position_size": 10,
-            "concentration_limit": 30,
-            "stop_loss_pct": 5,
-            "excluded_sectors": [],
-            "excluded_tickers": [],
-            "hard_rules": "",
-            "rebalance_frequency": "weekly",
-            "drift_tolerance": 5,
-            "auto_rebalance": False,
-        },
-        status=PortfolioStatus.ACTIVE,
-    )
-    session.add(portfolio)
-    await session.flush()
 
     # --- Sample Ideas ---
     ideas_data = [
@@ -357,8 +320,7 @@ async def run_seed(session: AsyncSession) -> SeedResult:
 
     return SeedResult(
         success=True,
-        message="Database seeded successfully with $1M paper portfolio",
-        portfolio_id=portfolio.id,
+        message="Database seeded successfully with sample data",
         ideas_created=ideas_created,
         trades_created=trades_created,
         knowledge_entries_created=ke_created,

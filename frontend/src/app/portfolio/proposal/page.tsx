@@ -175,7 +175,7 @@ function ProposalPageInner() {
         proposal.initial_amount,
         proposal.holdings,
       );
-      router.push('/portfolio?approved=true');
+      router.push(`/portfolio?portfolio_id=${portfolioId}&approved=true`);
     } catch (err: any) {
       console.error('Failed to approve:', err);
     } finally {

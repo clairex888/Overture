@@ -585,9 +585,10 @@ function PortfolioPageInner() {
   useEffect(() => {
     if (searchParams.get('approved') === 'true') {
       setShowApprovedBanner(true);
-      // Clean URL without reloading
+      // Clean URL without reloading (remove approved & portfolio_id)
       const url = new URL(window.location.href);
       url.searchParams.delete('approved');
+      url.searchParams.delete('portfolio_id');
       window.history.replaceState({}, '', url.pathname + url.search);
     }
   }, [searchParams]);
@@ -599,16 +600,33 @@ function PortfolioPageInner() {
       const list = await portfolioAPI.list();
       setPortfolios(list);
 
+      // Check if user has any portfolio with real positions
+      const hasAnyPositions = list.some((p) => p.positions_count > 0 || p.invested > 0);
+
       if (list.length === 0) {
-        // No portfolios — show first-time modal
+        // No portfolios at all — show first-time init modal
         setModalMode('create');
         setModalOpen(true);
       } else {
-        // Select first portfolio or keep current selection
+        // If a portfolio_id is in the URL, prefer that one
+        const urlPortfolioId = searchParams.get('portfolio_id');
+        const targetFromUrl = urlPortfolioId ? list.find((p) => p.id === urlPortfolioId) : null;
+
         setActivePortfolioId((prev) => {
+          if (targetFromUrl) return targetFromUrl.id;
           const stillExists = list.find((p) => p.id === prev);
-          return stillExists ? prev : list[0].id;
+          if (stillExists) return prev;
+          // Prefer a portfolio with positions, otherwise first
+          const withPositions = list.find((p) => p.positions_count > 0 || p.invested > 0);
+          return withPositions ? withPositions.id : list[0].id;
         });
+
+        // If ALL portfolios are empty (no positions at all), show init popup
+        // This handles the seed portfolio case — user sees it as "first time"
+        if (!hasAnyPositions && !searchParams.get('approved')) {
+          setModalMode('create');
+          setModalOpen(true);
+        }
       }
     } catch (err) {
       console.error('Failed to fetch portfolio list:', err);
@@ -618,7 +636,7 @@ function PortfolioPageInner() {
     } finally {
       setListLoading(false);
     }
-  }, []);
+  }, [searchParams]);
 
   useEffect(() => {
     fetchPortfolioList();

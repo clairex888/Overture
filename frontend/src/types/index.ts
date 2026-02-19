@@ -1,3 +1,19 @@
+// Auth types
+export interface UserProfile {
+  id: string;
+  email: string;
+  display_name: string | null;
+  role: string;
+  is_active: boolean;
+  portfolio_id: string | null;
+  created_at: string;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: UserProfile;
+}
+
 // Core types matching backend API response schemas
 
 export interface Ticker {

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
-import Sidebar from '@/components/layout/Sidebar';
+import AuthProvider from '@/components/providers/AuthProvider';
+import AuthenticatedShell from '@/components/layout/AuthenticatedShell';
 import WebSocketProvider from '@/components/providers/WebSocketProvider';
 
 export const metadata: Metadata = {
@@ -22,14 +23,11 @@ export default function RootLayout({
         />
       </head>
       <body className="bg-dark-800 text-text-primary antialiased">
-        <WebSocketProvider>
-          <div className="flex min-h-screen">
-            <Sidebar />
-            <main className="flex-1 ml-60">
-              <div className="p-6 max-w-[1600px]">{children}</div>
-            </main>
-          </div>
-        </WebSocketProvider>
+        <AuthProvider>
+          <WebSocketProvider>
+            <AuthenticatedShell>{children}</AuthenticatedShell>
+          </WebSocketProvider>
+        </AuthProvider>
       </body>
     </html>
   );

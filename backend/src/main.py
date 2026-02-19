@@ -4,11 +4,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routes import ideas, portfolio, agents, knowledge, trades, alerts, rl, seed, market_data
+from src.api.routes import ideas, portfolio, agents, knowledge, trades, alerts, rl, seed, market_data, auth
 from src.api.websocket import router as ws_router
 from src.config import settings
 from src.models import base as db_base
 from src.models.base import async_session_factory
+import src.models.user  # noqa: F401 — ensure User table is created
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,40 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.warning("Auto-seed skipped: %s", exc)
 
+        # Seed master admin account (idempotent)
+        try:
+            await _seed_master_user()
+        except Exception as exc:
+            logger.warning("Master user seed skipped: %s", exc)
+
     yield
+
+
+async def _seed_master_user() -> None:
+    """Create the master admin account if it doesn't exist."""
+    from sqlalchemy import select
+    from src.models.user import User, UserRole
+    from src.auth import hash_password
+
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(User).where(User.email == "admin@overture.ai")
+        )
+        if result.scalar_one_or_none():
+            return
+
+        from uuid import uuid4
+        admin = User(
+            id=str(uuid4()),
+            email="admin@overture.ai",
+            hashed_password=hash_password("admin123"),
+            display_name="Master Admin",
+            role=UserRole.ADMIN,
+            is_active=True,
+        )
+        session.add(admin)
+        await session.commit()
+        logger.info("Master admin account created: admin@overture.ai")
 
 
 app = FastAPI(
@@ -55,6 +89,7 @@ app.include_router(alerts.router, prefix="/api/alerts", tags=["alerts"])
 app.include_router(rl.router, prefix="/api/rl", tags=["rl"])
 app.include_router(seed.router, prefix="/api/seed", tags=["seed"])
 app.include_router(market_data.router, prefix="/api/market-data", tags=["market-data"])
+app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 
 # WebSocket
 app.include_router(ws_router, prefix="/ws", tags=["websocket"])

@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   LayoutDashboard,
   Lightbulb,
@@ -14,7 +14,10 @@ import {
   Settings,
   Sliders,
   BarChart3,
+  LogOut,
+  User,
 } from 'lucide-react';
+import { useAuth } from '@/components/providers/AuthProvider';
 
 const navItems = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -39,6 +42,13 @@ const navItems = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const { user, logout } = useAuth();
+
+  const handleLogout = () => {
+    logout();
+    router.push('/login');
+  };
 
   return (
     <aside className="fixed left-0 top-0 h-screen w-60 bg-dark-900 border-r border-white/[0.08] flex flex-col z-50">
@@ -115,19 +125,48 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* System Status */}
-      <div className="p-4 border-t border-white/[0.08]">
-        <div className="flex items-center gap-2 mb-3">
-          <div className="w-2 h-2 rounded-full bg-profit animate-pulse-slow" />
-          <span className="text-xs text-text-muted">System Online</span>
+      {/* User Profile & System Status */}
+      <div className="border-t border-white/[0.08]">
+        {/* User info */}
+        {user && (
+          <div className="px-4 py-3 border-b border-white/[0.06]">
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 rounded-full bg-info/15 flex items-center justify-center flex-shrink-0">
+                <User className="w-3.5 h-3.5 text-info" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium text-text-primary truncate">
+                  {user.display_name || user.email}
+                </p>
+                <p className="text-[10px] text-text-muted truncate">
+                  {user.role === 'admin' ? 'Admin' : 'User'}
+                </p>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="p-1.5 rounded-md text-text-muted hover:text-loss hover:bg-loss/10 transition-colors"
+                title="Sign out"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* System status */}
+        <div className="p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="w-2 h-2 rounded-full bg-profit animate-pulse-slow" />
+            <span className="text-xs text-text-muted">System Online</span>
+          </div>
+          <Link
+            href="#"
+            className="flex items-center gap-2 text-xs text-text-muted hover:text-text-secondary transition-colors"
+          >
+            <Settings className="w-3.5 h-3.5" />
+            Settings
+          </Link>
         </div>
-        <Link
-          href="#"
-          className="flex items-center gap-2 text-xs text-text-muted hover:text-text-secondary transition-colors"
-        >
-          <Settings className="w-3.5 h-3.5" />
-          Settings
-        </Link>
       </div>
     </aside>
   );

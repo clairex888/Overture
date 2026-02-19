@@ -11,6 +11,7 @@ import {
   Award,
   BarChart3,
   AlertTriangle,
+  DollarSign,
   Filter,
   Loader2,
 } from 'lucide-react';
@@ -125,6 +126,20 @@ export default function TradesPage() {
   const pnlValues = tradesWithPnl.map((t) => t.pnl as number);
   const bestTrade = pnlValues.length > 0 ? Math.max(...pnlValues) : 0;
   const worstTrade = pnlValues.length > 0 ? Math.min(...pnlValues) : 0;
+
+  // Aggregate trading costs
+  const totalTradingCost = allTrades.reduce(
+    (sum, t) => sum + (t.trading_cost?.total_cost || 0), 0
+  );
+  const totalSpreadCost = allTrades.reduce(
+    (sum, t) => sum + (t.trading_cost?.spread_cost || 0), 0
+  );
+  const totalCommission = allTrades.reduce(
+    (sum, t) => sum + (t.trading_cost?.commission || 0), 0
+  );
+  const totalImpactCost = allTrades.reduce(
+    (sum, t) => sum + (t.trading_cost?.impact_cost || 0), 0
+  );
 
   const filteredHistory =
     historyFilter === 'all'
@@ -290,6 +305,42 @@ export default function TradesPage() {
         </div>
       </div>
 
+      {/* Trading Costs Summary */}
+      {totalTradingCost > 0 && (
+        <div className="card">
+          <h3 className="text-sm font-semibold text-text-primary mb-3 flex items-center gap-2">
+            <DollarSign className="w-4 h-4 text-warning" />
+            Trading Costs & Slippage
+          </h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="p-3 rounded-lg bg-dark-800">
+              <p className="text-[11px] text-text-muted mb-1">Total Cost</p>
+              <p className="text-lg font-bold text-warning">
+                ${totalTradingCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </p>
+            </div>
+            <div className="p-3 rounded-lg bg-dark-800">
+              <p className="text-[11px] text-text-muted mb-1">Spread Cost</p>
+              <p className="text-lg font-bold text-text-primary">
+                ${totalSpreadCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </p>
+            </div>
+            <div className="p-3 rounded-lg bg-dark-800">
+              <p className="text-[11px] text-text-muted mb-1">Market Impact</p>
+              <p className="text-lg font-bold text-text-primary">
+                ${totalImpactCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </p>
+            </div>
+            <div className="p-3 rounded-lg bg-dark-800">
+              <p className="text-[11px] text-text-muted mb-1">Commission</p>
+              <p className="text-lg font-bold text-text-primary">
+                ${totalCommission.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Active Trades */}
       <div className="card overflow-hidden p-0">
         <div className="px-4 py-3 border-b border-white/[0.08] flex items-center justify-between">
@@ -429,6 +480,8 @@ export default function TradesPage() {
                   <th className="table-header text-right px-4 py-3">Entry</th>
                   <th className="table-header text-right px-4 py-3">Target</th>
                   <th className="table-header text-right px-4 py-3">P&L</th>
+                  <th className="table-header text-right px-4 py-3">Cost</th>
+                  <th className="table-header text-right px-4 py-3">Slippage</th>
                   <th className="table-header text-center px-4 py-3">Status</th>
                   <th className="table-header text-left px-4 py-3">Closed At</th>
                 </tr>
@@ -436,6 +489,7 @@ export default function TradesPage() {
               <tbody>
                 {filteredHistory.map((trade) => {
                   const pnlInfo = formatPnl(trade.pnl);
+                  const tc = trade.trading_cost;
                   return (
                     <tr
                       key={trade.id}
@@ -477,6 +531,12 @@ export default function TradesPage() {
                         ) : (
                           <span>—</span>
                         )}
+                      </td>
+                      <td className="table-cell text-right font-mono text-warning">
+                        {tc ? `$${tc.total_cost.toFixed(2)}` : '—'}
+                      </td>
+                      <td className="table-cell text-right font-mono text-text-muted">
+                        {tc ? `${tc.slippage_pct.toFixed(3)}%` : '—'}
                       </td>
                       <td className="table-cell text-center">
                         <span

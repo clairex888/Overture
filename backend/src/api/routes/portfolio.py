@@ -2,20 +2,32 @@
 Portfolio API routes.
 
 Provides portfolio overview, positions, risk metrics, performance analytics,
-allocation breakdowns, and rebalancing triggers.
+allocation breakdowns, rebalancing triggers, and portfolio initialization.
 All data is persisted in PostgreSQL via SQLAlchemy async models.
 """
 
+import logging
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from typing import Any
 from datetime import datetime
+from uuid import uuid4
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.base import get_session
 from src.models.portfolio import Portfolio, Position as PositionModel, PortfolioStatus
+from src.models.trade import Trade, TradeStatus, TradeDirection, InstrumentType
+from src.services.portfolio_init import (
+    fetch_last_close_prices,
+    generate_proposal,
+    compute_trading_cost,
+    ASSET_UNIVERSE,
+    INTRA_CLASS_WEIGHTS,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -423,4 +435,357 @@ async def get_allocation(session: AsyncSession = Depends(get_session)):
         by_sector=[],
         by_geography=[],
         last_updated=_now_iso(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Portfolio Initialization / Proposal / Approval
+# ---------------------------------------------------------------------------
+
+
+class InitializeRequest(BaseModel):
+    initial_amount: float = Field(1_000_000, gt=0, description="Starting capital in USD")
+
+
+class ProposedHolding(BaseModel):
+    ticker: str
+    name: str
+    asset_class: str
+    sub_class: str
+    instrument: str
+    direction: str
+    quantity: float
+    price: float
+    fill_price: float
+    market_value: float
+    weight: float
+    trading_cost: dict[str, float]
+
+
+class ProposedTrade(BaseModel):
+    ticker: str
+    name: str
+    direction: str
+    instrument: str
+    quantity: float
+    price: float
+    fill_price: float
+    notional: float
+    spread_cost: float
+    impact_cost: float
+    commission: float
+    sec_fee: float
+    total_cost: float
+    slippage_pct: float
+
+
+class PortfolioProposal(BaseModel):
+    initial_amount: float
+    total_value: float
+    total_invested: float
+    cash: float
+    total_trading_cost: float
+    num_positions: int
+    holdings: list[ProposedHolding]
+    trades: list[ProposedTrade]
+    allocation_summary: dict[str, float]
+    risk_appetite: str
+    strategy_notes: list[str]
+
+
+class TweakRequest(BaseModel):
+    """User can tweak individual holdings before approving."""
+    initial_amount: float = Field(1_000_000, gt=0)
+    holdings: list[dict[str, Any]] = Field(
+        ..., description="Modified holdings list with ticker, quantity, etc."
+    )
+
+
+class ApproveRequest(BaseModel):
+    """User approves the proposal to execute."""
+    initial_amount: float = Field(1_000_000, gt=0)
+    holdings: list[dict[str, Any]]
+
+
+class ApproveResult(BaseModel):
+    success: bool
+    portfolio_id: str
+    positions_created: int
+    trades_created: int
+    total_value: float
+    cash: float
+    total_invested: float
+    total_trading_cost: float
+    message: str
+
+
+@router.post("/initialize", response_model=PortfolioProposal)
+async def initialize_portfolio(
+    payload: InitializeRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Initialize (or restart) a portfolio.
+
+    Fetches last close prices, generates an optimal allocation proposal using
+    core-satellite + risk parity approach, and returns the proposal for user
+    review before execution.
+    """
+    # Load existing portfolio preferences, or use defaults
+    result = await session.execute(
+        select(Portfolio).where(Portfolio.status == PortfolioStatus.ACTIVE).limit(1)
+    )
+    portfolio = result.scalar_one_or_none()
+    preferences = (portfolio.preferences if portfolio else None) or {}
+
+    # Gather all tickers from the universe
+    all_tickers: list[str] = []
+    for assets in ASSET_UNIVERSE.values():
+        all_tickers.extend(a["ticker"] for a in assets)
+
+    # Fetch latest prices
+    prices = await fetch_last_close_prices(all_tickers)
+
+    # Generate proposal
+    proposal = generate_proposal(payload.initial_amount, preferences, prices)
+
+    return PortfolioProposal(**proposal)
+
+
+@router.post("/propose", response_model=PortfolioProposal)
+async def propose_portfolio(
+    payload: TweakRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Recalculate proposal after user tweaks holdings.
+
+    Accepts a modified holdings list and recalculates weights, costs, and totals.
+    """
+    # Get prices for all tickers in the tweaked holdings
+    tickers = [h["ticker"] for h in payload.holdings]
+    prices = await fetch_last_close_prices(tickers)
+
+    holdings_out: list[dict[str, Any]] = []
+    trades_out: list[dict[str, Any]] = []
+    total_invested = 0.0
+    total_trading_cost = 0.0
+
+    for h in payload.holdings:
+        ticker = h["ticker"]
+        quantity = h.get("quantity", 0)
+        instrument = h.get("instrument", "etf")
+        price = prices.get(ticker) or h.get("price", 0)
+
+        if quantity <= 0 or price <= 0:
+            continue
+
+        cost_info = compute_trading_cost(ticker, quantity, price, instrument)
+        actual_notional = quantity * price
+        fill_price = cost_info["fill_price"]
+
+        holding = {
+            "ticker": ticker,
+            "name": h.get("name", ticker),
+            "asset_class": h.get("asset_class", "equities"),
+            "sub_class": h.get("sub_class", ""),
+            "instrument": instrument,
+            "direction": "long",
+            "quantity": quantity,
+            "price": round(price, 4),
+            "fill_price": fill_price,
+            "market_value": round(actual_notional, 2),
+            "weight": 0,
+            "trading_cost": cost_info,
+        }
+        holdings_out.append(holding)
+
+        trades_out.append({
+            "ticker": ticker,
+            "name": h.get("name", ticker),
+            "direction": "buy",
+            "instrument": instrument,
+            "quantity": quantity,
+            "price": round(price, 4),
+            "fill_price": fill_price,
+            "notional": round(actual_notional, 2),
+            **cost_info,
+        })
+
+        total_invested += quantity * fill_price
+        total_trading_cost += cost_info["total_cost"]
+
+    cash = payload.initial_amount - total_invested - total_trading_cost
+    if cash < 0:
+        cash = 0
+    total_value = total_invested + cash
+
+    for h in holdings_out:
+        h["weight"] = round(h["market_value"] / total_value * 100, 2) if total_value > 0 else 0
+
+    # Build allocation summary
+    class_summary: dict[str, float] = {}
+    for h in holdings_out:
+        ac = h["asset_class"]
+        class_summary[ac] = class_summary.get(ac, 0) + h["market_value"]
+    class_summary["cash"] = cash
+    allocation_summary = {
+        k: round(v / total_value * 100, 2) if total_value > 0 else 0
+        for k, v in class_summary.items()
+    }
+
+    return PortfolioProposal(
+        initial_amount=payload.initial_amount,
+        total_value=round(total_value, 2),
+        total_invested=round(total_invested, 2),
+        cash=round(cash, 2),
+        total_trading_cost=round(total_trading_cost, 2),
+        num_positions=len(holdings_out),
+        holdings=holdings_out,
+        trades=trades_out,
+        allocation_summary=allocation_summary,
+        risk_appetite="custom",
+        strategy_notes=["User-modified allocation"],
+    )
+
+
+_INSTRUMENT_MAP = {
+    "etf": InstrumentType.ETF,
+    "equity": InstrumentType.EQUITY,
+    "crypto": InstrumentType.CRYPTO,
+    "bond": InstrumentType.BOND,
+    "option": InstrumentType.OPTION,
+    "future": InstrumentType.FUTURE,
+}
+
+
+@router.post("/approve", response_model=ApproveResult)
+async def approve_portfolio(
+    payload: ApproveRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Approve and execute the proposed portfolio.
+
+    Creates/resets the portfolio, creates position records at fill prices,
+    and creates trade records with trading cost metadata.
+    """
+    # Find or create portfolio
+    result = await session.execute(
+        select(Portfolio).where(Portfolio.status == PortfolioStatus.ACTIVE).limit(1)
+    )
+    portfolio = result.scalar_one_or_none()
+
+    if portfolio:
+        # Delete existing positions for restart
+        await session.execute(
+            delete(PositionModel).where(PositionModel.portfolio_id == portfolio.id)
+        )
+    else:
+        portfolio = Portfolio(
+            id=str(uuid4()),
+            name="Paper Portfolio",
+            description="AI Hedge Fund Paper Trading Portfolio",
+            status=PortfolioStatus.ACTIVE,
+            preferences={},
+        )
+        session.add(portfolio)
+        await session.flush()
+
+    total_invested = 0.0
+    total_trading_cost = 0.0
+    positions_created = 0
+    trades_created = 0
+
+    for h in payload.holdings:
+        ticker = h.get("ticker", "")
+        quantity = h.get("quantity", 0)
+        price = h.get("price", 0)
+        fill_price = h.get("fill_price", price)
+        market_value = h.get("market_value", quantity * price)
+        instrument = h.get("instrument", "etf")
+        asset_class = h.get("asset_class", "equities")
+        cost = h.get("trading_cost", {})
+        trade_cost = cost.get("total_cost", 0)
+
+        if quantity <= 0:
+            continue
+
+        # Create Trade record
+        trade_id = str(uuid4())
+        inst_type = _INSTRUMENT_MAP.get(instrument, InstrumentType.ETF)
+        trade = Trade(
+            id=trade_id,
+            tickers=[ticker],
+            direction=TradeDirection.LONG,
+            instrument_type=inst_type,
+            status=TradeStatus.CLOSED,
+            quantity=quantity,
+            entry_price=fill_price,
+            current_price=price,
+            notional_value=market_value,
+            pnl=0,
+            pnl_pct=0,
+            entry_time=datetime.utcnow(),
+            metadata_={
+                "symbol": ticker,
+                "direction_label": "buy",
+                "fill_price": fill_price,
+                "fill_quantity": quantity,
+                "limit_price": price,
+                "notes": f"Portfolio initialization — {h.get('name', ticker)}",
+                "trading_cost": cost,
+                "slippage_pct": cost.get("slippage_pct", 0),
+                "spread_cost": cost.get("spread_cost", 0),
+                "impact_cost": cost.get("impact_cost", 0),
+                "commission": cost.get("commission", 0),
+                "total_cost": trade_cost,
+                "init_trade": True,
+            },
+        )
+        session.add(trade)
+        trades_created += 1
+
+        # Create Position record
+        position = PositionModel(
+            id=str(uuid4()),
+            portfolio_id=portfolio.id,
+            trade_id=trade_id,
+            ticker=ticker,
+            direction="long",
+            quantity=quantity,
+            avg_entry_price=fill_price,
+            current_price=price,
+            market_value=market_value,
+            pnl=0,
+            pnl_pct=0,
+            weight=h.get("weight", 0) / 100.0 if h.get("weight", 0) > 1 else h.get("weight", 0),
+            asset_class=asset_class,
+        )
+        session.add(position)
+        positions_created += 1
+
+        total_invested += quantity * fill_price
+        total_trading_cost += trade_cost
+
+    cash = payload.initial_amount - total_invested - total_trading_cost
+    if cash < 0:
+        cash = 0
+    total_value = total_invested + cash
+
+    # Update portfolio totals
+    portfolio.total_value = total_value
+    portfolio.cash = cash
+    portfolio.invested = total_invested
+    portfolio.pnl = 0
+    portfolio.pnl_pct = 0
+
+    return ApproveResult(
+        success=True,
+        portfolio_id=portfolio.id,
+        positions_created=positions_created,
+        trades_created=trades_created,
+        total_value=round(total_value, 2),
+        cash=round(cash, 2),
+        total_invested=round(total_invested, 2),
+        total_trading_cost=round(total_trading_cost, 2),
+        message=f"Portfolio initialized with {positions_created} positions. "
+                f"Trading costs: ${total_trading_cost:,.2f}",
     )

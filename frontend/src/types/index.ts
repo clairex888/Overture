@@ -48,6 +48,14 @@ export interface IdeaStats {
   avg_conviction: number;
 }
 
+export interface TradeCostInfo {
+  spread_cost: number;
+  impact_cost: number;
+  commission: number;
+  total_cost: number;
+  slippage_pct: number;
+}
+
 export interface Trade {
   id: string;
   idea_id: string | null;
@@ -63,6 +71,7 @@ export interface Trade {
   fill_quantity: number | null;
   pnl: number | null;
   notes: string | null;
+  trading_cost: TradeCostInfo | null;
   created_at: string;
   updated_at: string;
 }
@@ -357,6 +366,75 @@ export interface AssetSummary {
 export interface AssetAllocationTarget {
   asset_class: string;
   target_weight: number;
+}
+
+// Portfolio Initialization types
+export interface TradingCost {
+  spread_cost: number;
+  impact_cost: number;
+  commission: number;
+  sec_fee: number;
+  total_cost: number;
+  slippage_pct: number;
+  fill_price: number;
+}
+
+export interface ProposedHolding {
+  ticker: string;
+  name: string;
+  asset_class: string;
+  sub_class: string;
+  instrument: string;
+  direction: string;
+  quantity: number;
+  price: number;
+  fill_price: number;
+  market_value: number;
+  weight: number;
+  trading_cost: TradingCost;
+}
+
+export interface ProposedTrade {
+  ticker: string;
+  name: string;
+  direction: string;
+  instrument: string;
+  quantity: number;
+  price: number;
+  fill_price: number;
+  notional: number;
+  spread_cost: number;
+  impact_cost: number;
+  commission: number;
+  sec_fee: number;
+  total_cost: number;
+  slippage_pct: number;
+}
+
+export interface PortfolioProposal {
+  initial_amount: number;
+  total_value: number;
+  total_invested: number;
+  cash: number;
+  total_trading_cost: number;
+  num_positions: number;
+  holdings: ProposedHolding[];
+  trades: ProposedTrade[];
+  allocation_summary: Record<string, number>;
+  risk_appetite: string;
+  strategy_notes: string[];
+}
+
+export interface ApproveResult {
+  success: boolean;
+  portfolio_id: string;
+  positions_created: number;
+  trades_created: number;
+  total_value: number;
+  cash: number;
+  total_invested: number;
+  total_trading_cost: number;
+  message: string;
 }
 
 export interface PortfolioPreferences {

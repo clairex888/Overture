@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   DollarSign,
   TrendingUp,
@@ -15,6 +15,12 @@ import {
   ArrowUp,
   ArrowDown,
   Minus,
+  Loader2,
+  Rocket,
+  CheckCircle2,
+  RefreshCw,
+  Edit3,
+  RotateCcw,
 } from 'lucide-react';
 import {
   PieChart,
@@ -31,19 +37,26 @@ import type {
   RiskMetrics,
   AllocationBreakdown,
   MarketOutlook,
+  PortfolioProposal,
+  ProposedHolding,
 } from '@/types';
 
 // Color mapping for asset class categories in the pie chart
 const CATEGORY_COLORS: Record<string, string> = {
+  equities: '#3b82f6',
   Equities: '#3b82f6',
   Equity: '#3b82f6',
   Stocks: '#3b82f6',
+  fixed_income: '#8b5cf6',
   Bonds: '#8b5cf6',
   'Fixed Income': '#8b5cf6',
+  commodities: '#f59e0b',
   Commodities: '#f59e0b',
   ETFs: '#00d084',
   ETF: '#00d084',
+  cash: '#64748b',
   Cash: '#64748b',
+  crypto: '#e879f9',
   Crypto: '#e879f9',
   Alternatives: '#f97316',
   'Real Estate': '#14b8a6',
@@ -83,7 +96,6 @@ function formatCurrencyDetailed(value: number): string {
 }
 
 function deriveRiskScore(risk: RiskMetrics): { score: string; label: string; colorClass: string } {
-  // Derive a 0-10 risk score from portfolio_beta and portfolio_volatility
   const betaScore = Math.min(risk.portfolio_beta * 5, 5);
   const volScore = Math.min(risk.portfolio_volatility * 20, 5);
   const raw = betaScore + volScore;
@@ -116,10 +128,497 @@ function CustomPieTooltip({ active, payload }: any) {
   );
 }
 
+// ============================================================
+// Portfolio Initialization Panel
+// ============================================================
+
+function InitializePanel({
+  onProposalReady,
+}: {
+  onProposalReady: (proposal: PortfolioProposal) => void;
+}) {
+  const [amount, setAmount] = useState<string>('1000000');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleInitialize = async () => {
+    const numAmount = parseFloat(amount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      setError('Please enter a valid amount greater than 0');
+      return;
+    }
+    setError(null);
+    setLoading(true);
+    try {
+      const proposal = await portfolioAPI.initialize(numAmount);
+      onProposalReady(proposal);
+    } catch (err: any) {
+      setError(err.message || 'Failed to generate portfolio proposal');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const presets = [
+    { label: '$100K', value: 100_000 },
+    { label: '$500K', value: 500_000 },
+    { label: '$1M', value: 1_000_000 },
+    { label: '$5M', value: 5_000_000 },
+    { label: '$10M', value: 10_000_000 },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-text-primary">Portfolio</h1>
+          <p className="text-sm text-text-muted mt-1">
+            Initialize your portfolio to get started with AI-optimized allocation
+          </p>
+        </div>
+      </div>
+
+      <div className="card max-w-2xl mx-auto">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-12 h-12 rounded-xl bg-accent/10 flex items-center justify-center">
+            <Rocket className="w-6 h-6 text-accent" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-text-primary">Initialize Portfolio</h2>
+            <p className="text-sm text-text-muted">
+              Set your starting capital and our AI agents will propose an optimal allocation
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-text-secondary mb-2">
+              Starting Capital (USD)
+            </label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted text-lg">$</span>
+              <input
+                type="text"
+                value={amount}
+                onChange={(e) => {
+                  const raw = e.target.value.replace(/[^0-9.]/g, '');
+                  setAmount(raw);
+                }}
+                className="w-full pl-8 pr-4 py-3 bg-dark-800 border border-white/[0.08] rounded-lg text-text-primary text-lg font-mono focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/20"
+                placeholder="1,000,000"
+              />
+            </div>
+            {amount && parseFloat(amount) > 0 && (
+              <p className="text-xs text-text-muted mt-1">
+                {formatCurrency(parseFloat(amount))}
+              </p>
+            )}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {presets.map((p) => (
+              <button
+                key={p.value}
+                onClick={() => setAmount(p.value.toString())}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  parseFloat(amount) === p.value
+                    ? 'bg-accent/20 text-accent border border-accent/30'
+                    : 'bg-dark-700 text-text-muted border border-white/[0.08] hover:border-white/20 hover:text-text-secondary'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+
+          {error && (
+            <div className="p-3 rounded-lg bg-loss/10 border border-loss/20">
+              <p className="text-sm text-loss">{error}</p>
+            </div>
+          )}
+
+          <button
+            onClick={handleInitialize}
+            disabled={loading}
+            className="w-full py-3 rounded-lg bg-accent text-white font-medium text-sm hover:bg-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {loading ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Generating Optimal Portfolio...
+              </>
+            ) : (
+              <>
+                <Rocket className="w-4 h-4" />
+                Initialize Portfolio
+              </>
+            )}
+          </button>
+
+          <div className="pt-4 border-t border-white/[0.08]">
+            <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">
+              What happens next
+            </h3>
+            <div className="space-y-2 text-xs text-text-secondary">
+              <div className="flex items-start gap-2">
+                <span className="text-accent font-medium mt-0.5">1.</span>
+                <span>AI agents analyze market conditions and your preferences to propose an optimal allocation</span>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="text-accent font-medium mt-0.5">2.</span>
+                <span>Review the proposed holdings — you can tweak quantities before approving</span>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="text-accent font-medium mt-0.5">3.</span>
+                <span>Approve to execute — positions are filled at last close prices with simulated trading costs</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Proposal Review Panel
+// ============================================================
+
+function ProposalPanel({
+  proposal,
+  onApprove,
+  onRecalculate,
+  onRestart,
+  approving,
+}: {
+  proposal: PortfolioProposal;
+  onApprove: () => void;
+  onRecalculate: (holdings: ProposedHolding[]) => void;
+  onRestart: () => void;
+  approving: boolean;
+}) {
+  const [editableHoldings, setEditableHoldings] = useState<ProposedHolding[]>(proposal.holdings);
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
+
+  // Sync when proposal changes (e.g. after recalculation)
+  useEffect(() => {
+    setEditableHoldings(proposal.holdings);
+    setEditingIdx(null);
+  }, [proposal]);
+
+  const handleQuantityChange = (idx: number, newQty: string) => {
+    const updated = [...editableHoldings];
+    const qty = parseFloat(newQty);
+    if (!isNaN(qty) && qty >= 0) {
+      updated[idx] = { ...updated[idx], quantity: qty };
+      setEditableHoldings(updated);
+    }
+  };
+
+  const handleRecalculate = () => {
+    setEditingIdx(null);
+    onRecalculate(editableHoldings);
+  };
+
+  // Build allocation pie data
+  const allocData = Object.entries(proposal.allocation_summary)
+    .filter(([, v]) => v > 0)
+    .map(([k, v], i) => ({
+      name: k.charAt(0).toUpperCase() + k.slice(1).replace('_', ' '),
+      value: v,
+      color: getColorForCategory(k, i),
+    }));
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-text-primary">Portfolio Proposal</h1>
+          <p className="text-sm text-text-muted mt-1">
+            Review the AI-optimized allocation, tweak as needed, then approve to execute
+          </p>
+        </div>
+        <button
+          onClick={onRestart}
+          className="btn-secondary flex items-center gap-2 text-xs"
+        >
+          <RotateCcw className="w-3.5 h-3.5" />
+          Start Over
+        </button>
+      </div>
+
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <div className="card">
+          <p className="text-xs font-medium text-text-muted uppercase tracking-wider mb-1">Initial Capital</p>
+          <p className="text-xl font-bold text-text-primary">{formatCurrency(proposal.initial_amount)}</p>
+        </div>
+        <div className="card">
+          <p className="text-xs font-medium text-text-muted uppercase tracking-wider mb-1">To Invest</p>
+          <p className="text-xl font-bold text-info">{formatCurrency(proposal.total_invested)}</p>
+        </div>
+        <div className="card">
+          <p className="text-xs font-medium text-text-muted uppercase tracking-wider mb-1">Cash Reserve</p>
+          <p className="text-xl font-bold text-text-primary">{formatCurrency(proposal.cash)}</p>
+          <span className="text-[11px] text-text-muted">
+            {proposal.total_value > 0
+              ? `${((proposal.cash / proposal.total_value) * 100).toFixed(1)}%`
+              : '0%'}
+          </span>
+        </div>
+        <div className="card">
+          <p className="text-xs font-medium text-text-muted uppercase tracking-wider mb-1">Trading Costs</p>
+          <p className="text-xl font-bold text-warning">{formatCurrency(proposal.total_trading_cost)}</p>
+          <span className="text-[11px] text-text-muted">
+            {proposal.total_invested > 0
+              ? `${((proposal.total_trading_cost / proposal.total_invested) * 100).toFixed(3)}%`
+              : '0%'}
+          </span>
+        </div>
+        <div className="card">
+          <p className="text-xs font-medium text-text-muted uppercase tracking-wider mb-1">Positions</p>
+          <p className="text-xl font-bold text-accent">{proposal.num_positions}</p>
+          <span className="text-[11px] text-text-muted">{proposal.risk_appetite} risk</span>
+        </div>
+      </div>
+
+      {/* Allocation + Strategy */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Pie Chart */}
+        <div className="card lg:col-span-1">
+          <h3 className="text-sm font-semibold text-text-primary mb-4">Proposed Allocation</h3>
+          {allocData.length > 0 ? (
+            <>
+              <ResponsiveContainer width="100%" height={220}>
+                <PieChart>
+                  <Pie
+                    data={allocData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={55}
+                    outerRadius={85}
+                    paddingAngle={3}
+                    dataKey="value"
+                    animationDuration={800}
+                  >
+                    {allocData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} stroke="transparent" />
+                    ))}
+                  </Pie>
+                  <Tooltip content={<CustomPieTooltip />} />
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="mt-2 space-y-1.5">
+                {allocData.map((item) => (
+                  <div key={item.name} className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: item.color }} />
+                      <span className="text-text-secondary">{item.name}</span>
+                    </div>
+                    <span className="text-text-primary font-medium">{item.value.toFixed(1)}%</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="flex items-center justify-center h-[220px] text-text-muted text-sm">
+              No allocation data
+            </div>
+          )}
+        </div>
+
+        {/* Strategy Notes */}
+        <div className="card lg:col-span-2">
+          <h3 className="text-sm font-semibold text-text-primary mb-4">Strategy Notes</h3>
+          <div className="space-y-2">
+            {proposal.strategy_notes.map((note, i) => (
+              <div key={i} className="flex items-start gap-2 text-sm text-text-secondary">
+                <CheckCircle2 className="w-4 h-4 text-profit shrink-0 mt-0.5" />
+                <span>{note}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Cost Breakdown */}
+          <div className="mt-6 pt-4 border-t border-white/[0.08]">
+            <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">
+              Trading Cost Breakdown
+            </h4>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {(() => {
+                const totals = proposal.trades.reduce(
+                  (acc, t) => ({
+                    spread: acc.spread + t.spread_cost,
+                    impact: acc.impact + t.impact_cost,
+                    commission: acc.commission + t.commission,
+                    total: acc.total + t.total_cost,
+                  }),
+                  { spread: 0, impact: 0, commission: 0, total: 0 }
+                );
+                return [
+                  { label: 'Spread', value: totals.spread },
+                  { label: 'Market Impact', value: totals.impact },
+                  { label: 'Commission', value: totals.commission },
+                  { label: 'Total', value: totals.total },
+                ].map((item) => (
+                  <div key={item.label} className="p-3 rounded-lg bg-dark-800">
+                    <p className="text-[11px] text-text-muted mb-1">{item.label}</p>
+                    <p className="text-sm font-semibold text-text-primary">
+                      ${item.value.toFixed(2)}
+                    </p>
+                  </div>
+                ));
+              })()}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Holdings Table — Editable */}
+      <div className="card overflow-hidden p-0">
+        <div className="px-4 py-3 border-b border-white/[0.08] flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+            Proposed Holdings
+            <span className="text-xs text-text-muted font-normal">Click quantity to edit</span>
+          </h3>
+          <button
+            onClick={handleRecalculate}
+            className="btn-secondary flex items-center gap-1.5 text-xs"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Recalculate
+          </button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-white/[0.08]">
+                <th className="table-header text-left px-4 py-3">Asset</th>
+                <th className="table-header text-left px-4 py-3">Class</th>
+                <th className="table-header text-right px-4 py-3">Qty</th>
+                <th className="table-header text-right px-4 py-3">Price</th>
+                <th className="table-header text-right px-4 py-3">Fill Price</th>
+                <th className="table-header text-right px-4 py-3">Notional</th>
+                <th className="table-header text-right px-4 py-3">Weight</th>
+                <th className="table-header text-right px-4 py-3">Cost</th>
+                <th className="table-header text-right px-4 py-3">Slippage</th>
+              </tr>
+            </thead>
+            <tbody>
+              {editableHoldings.map((h, idx) => (
+                <tr
+                  key={h.ticker}
+                  className="border-b border-white/[0.05] hover:bg-dark-750 transition-colors"
+                >
+                  <td className="table-cell">
+                    <div className="flex items-center gap-2">
+                      <span className="px-1.5 py-0.5 rounded bg-dark-500 text-xs font-mono text-text-primary font-medium">
+                        {h.ticker}
+                      </span>
+                      <span className="text-[11px] text-text-muted hidden lg:inline">{h.name}</span>
+                    </div>
+                  </td>
+                  <td className="table-cell">
+                    <span
+                      className="status-badge"
+                      style={{
+                        color: getColorForCategory(h.asset_class, idx),
+                        backgroundColor: getColorForCategory(h.asset_class, idx) + '20',
+                      }}
+                    >
+                      {h.asset_class.replace('_', ' ')}
+                    </span>
+                  </td>
+                  <td className="table-cell text-right">
+                    {editingIdx === idx ? (
+                      <input
+                        type="number"
+                        value={h.quantity}
+                        onChange={(e) => handleQuantityChange(idx, e.target.value)}
+                        onBlur={() => setEditingIdx(null)}
+                        onKeyDown={(e) => e.key === 'Enter' && setEditingIdx(null)}
+                        autoFocus
+                        className="w-24 px-2 py-1 bg-dark-800 border border-accent/50 rounded text-right text-xs font-mono text-text-primary focus:outline-none"
+                      />
+                    ) : (
+                      <button
+                        onClick={() => setEditingIdx(idx)}
+                        className="font-mono text-text-primary hover:text-accent transition-colors flex items-center gap-1 ml-auto"
+                      >
+                        {h.instrument === 'crypto'
+                          ? h.quantity.toFixed(4)
+                          : h.quantity.toLocaleString()}
+                        <Edit3 className="w-3 h-3 text-text-muted" />
+                      </button>
+                    )}
+                  </td>
+                  <td className="table-cell text-right font-mono">${h.price.toFixed(2)}</td>
+                  <td className="table-cell text-right font-mono text-text-muted">${h.fill_price.toFixed(2)}</td>
+                  <td className="table-cell text-right font-mono">
+                    ${h.market_value.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  </td>
+                  <td className="table-cell text-right font-mono text-text-primary">{h.weight.toFixed(1)}%</td>
+                  <td className="table-cell text-right font-mono text-warning">
+                    ${h.trading_cost.total_cost.toFixed(2)}
+                  </td>
+                  <td className="table-cell text-right font-mono text-text-muted">
+                    {h.trading_cost.slippage_pct.toFixed(3)}%
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Approve Button */}
+      <div className="flex items-center justify-between p-4 rounded-xl bg-dark-700 border border-accent/20">
+        <div>
+          <p className="text-sm font-semibold text-text-primary">Ready to execute?</p>
+          <p className="text-xs text-text-muted mt-0.5">
+            Positions will be opened at the fill prices shown above. You can always rebalance later.
+          </p>
+        </div>
+        <button
+          onClick={onApprove}
+          disabled={approving}
+          className="px-6 py-3 rounded-lg bg-profit text-white font-medium text-sm hover:bg-profit/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+        >
+          {approving ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Executing Trades...
+            </>
+          ) : (
+            <>
+              <CheckCircle2 className="w-4 h-4" />
+              Approve & Trade
+            </>
+          )}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Main Portfolio Page (existing + init flow)
+// ============================================================
+
 export default function PortfolioPage() {
   const [sortField, setSortField] = useState<string>('weight');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [loading, setLoading] = useState(true);
+  const [hasPortfolio, setHasPortfolio] = useState(false);
+
+  // Initialization flow state
+  const [showInit, setShowInit] = useState(false);
+  const [proposal, setProposal] = useState<PortfolioProposal | null>(null);
+  const [approving, setApproving] = useState(false);
+  const [approveSuccess, setApproveSuccess] = useState<string | null>(null);
+  const [recalculating, setRecalculating] = useState(false);
 
   const [overview, setOverview] = useState<PortfolioOverview>({
     total_value: 0,
@@ -163,30 +662,107 @@ export default function PortfolioPage() {
     last_updated: '',
   });
 
-  useEffect(() => {
-    async function fetchData() {
-      setLoading(true);
-      try {
-        const [overviewData, positionsData, riskData, allocationData, outlookData] = await Promise.all([
-          portfolioAPI.overview(),
-          portfolioAPI.positions(),
-          portfolioAPI.risk(),
-          portfolioAPI.allocation(),
-          knowledgeAPI.outlook(),
-        ]);
-        setOverview(overviewData);
-        setPositions(positionsData);
-        setRisk(riskData);
-        setAllocation(allocationData);
-        setOutlook(outlookData);
-      } catch (err) {
-        console.error('Failed to fetch portfolio data:', err);
-      } finally {
-        setLoading(false);
-      }
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [overviewData, positionsData, riskData, allocationData, outlookData] = await Promise.all([
+        portfolioAPI.overview(),
+        portfolioAPI.positions(),
+        portfolioAPI.risk(),
+        portfolioAPI.allocation(),
+        knowledgeAPI.outlook(),
+      ]);
+      setOverview(overviewData);
+      setPositions(positionsData);
+      setRisk(riskData);
+      setAllocation(allocationData);
+      setOutlook(outlookData);
+      setHasPortfolio(overviewData.positions_count > 0 || overviewData.invested > 0);
+    } catch (err) {
+      console.error('Failed to fetch portfolio data:', err);
+      setHasPortfolio(false);
+    } finally {
+      setLoading(false);
     }
-    fetchData();
   }, []);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  const handleProposalReady = (p: PortfolioProposal) => {
+    setProposal(p);
+    setApproveSuccess(null);
+  };
+
+  const handleRecalculate = async (holdings: ProposedHolding[]) => {
+    if (!proposal) return;
+    setRecalculating(true);
+    try {
+      const recalced = await portfolioAPI.propose(
+        proposal.initial_amount,
+        holdings.map((h) => ({
+          ticker: h.ticker,
+          name: h.name,
+          asset_class: h.asset_class,
+          sub_class: h.sub_class,
+          instrument: h.instrument,
+          quantity: h.quantity,
+          price: h.price,
+        }))
+      );
+      setProposal(recalced);
+    } catch (err) {
+      console.error('Failed to recalculate:', err);
+    } finally {
+      setRecalculating(false);
+    }
+  };
+
+  const handleApprove = async () => {
+    if (!proposal) return;
+    setApproving(true);
+    try {
+      const result = await portfolioAPI.approve(
+        proposal.initial_amount,
+        proposal.holdings
+      );
+      setApproveSuccess(result.message);
+      setProposal(null);
+      setShowInit(false);
+      // Refresh portfolio data
+      await fetchData();
+    } catch (err) {
+      console.error('Failed to approve:', err);
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  const handleRestart = () => {
+    setProposal(null);
+    setApproveSuccess(null);
+  };
+
+  // Show initialization panel if user has no positions or explicitly clicked init
+  if (!loading && (!hasPortfolio || showInit) && !proposal) {
+    return (
+      <InitializePanel onProposalReady={handleProposalReady} />
+    );
+  }
+
+  // Show proposal review panel
+  if (proposal) {
+    return (
+      <ProposalPanel
+        proposal={proposal}
+        onApprove={handleApprove}
+        onRecalculate={handleRecalculate}
+        onRestart={handleRestart}
+        approving={approving}
+      />
+    );
+  }
 
   // Map allocation by_asset_class to pie chart data
   const allocationData = allocation.by_asset_class.map((entry, index) => ({
@@ -242,7 +818,6 @@ export default function PortfolioPage() {
   if (loading) {
     return (
       <div className="space-y-6">
-        {/* Page Header */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-text-primary">Portfolio</h1>
@@ -258,7 +833,6 @@ export default function PortfolioPage() {
           </div>
         </div>
 
-        {/* Loading skeleton for summary cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           {Array.from({ length: 5 }).map((_, i) => (
             <div key={i} className="card animate-fade-in">
@@ -274,7 +848,6 @@ export default function PortfolioPage() {
           ))}
         </div>
 
-        {/* Loading skeleton for charts area */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="card lg:col-span-1">
             <div className="h-4 w-28 bg-dark-600 rounded animate-pulse mb-4" />
@@ -293,7 +866,6 @@ export default function PortfolioPage() {
           </div>
         </div>
 
-        {/* Loading skeleton for positions */}
         <div className="card overflow-hidden p-0">
           <div className="px-4 py-3 border-b border-white/[0.08] flex items-center justify-between">
             <div className="h-4 w-20 bg-dark-600 rounded animate-pulse" />
@@ -311,6 +883,22 @@ export default function PortfolioPage() {
 
   return (
     <div className="space-y-6">
+      {/* Success Banner */}
+      {approveSuccess && (
+        <div className="p-4 rounded-xl bg-profit/10 border border-profit/20 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <CheckCircle2 className="w-5 h-5 text-profit" />
+            <p className="text-sm text-profit font-medium">{approveSuccess}</p>
+          </div>
+          <button
+            onClick={() => setApproveSuccess(null)}
+            className="text-xs text-text-muted hover:text-text-secondary"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Page Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -320,6 +908,13 @@ export default function PortfolioPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => { setShowInit(true); setProposal(null); }}
+            className="btn-secondary flex items-center gap-2 text-xs"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            Reinitialize
+          </button>
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-dark-700 border border-white/[0.08]">
             <div className="w-2 h-2 rounded-full bg-profit animate-pulse-slow" />
             <span className="text-xs text-text-secondary">Live</span>
@@ -407,7 +1002,6 @@ export default function PortfolioPage() {
 
       {/* Allocation Chart + Risk Metrics */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Pie Chart */}
         <div className="card lg:col-span-1">
           <h3 className="text-sm font-semibold text-text-primary mb-4">Asset Allocation</h3>
           {allocationData.length > 0 ? (
@@ -457,7 +1051,6 @@ export default function PortfolioPage() {
           )}
         </div>
 
-        {/* Risk Metrics */}
         <div className="lg:col-span-2">
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
             {riskMetrics.map((metric) => {
@@ -575,7 +1168,6 @@ export default function PortfolioPage() {
                   {section.title}
                 </h4>
 
-                {/* Sentiment summary */}
                 <div className="flex items-center justify-between p-2.5 rounded-lg bg-dark-800 mb-2">
                   <span className="text-sm text-text-secondary">Sentiment</span>
                   <div className="flex items-center gap-2">
@@ -587,12 +1179,10 @@ export default function PortfolioPage() {
                   </div>
                 </div>
 
-                {/* Summary text */}
                 {layer.summary && (
                   <p className="text-xs text-text-secondary mb-2 px-1 leading-relaxed">{layer.summary}</p>
                 )}
 
-                {/* Key factors */}
                 {layer.key_factors.length > 0 && (
                   <div className="space-y-1">
                     {layer.key_factors.map((factor, idx) => (

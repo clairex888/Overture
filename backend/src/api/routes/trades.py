@@ -33,6 +33,14 @@ class TradeAdjustment(BaseModel):
     notes: str | None = None
 
 
+class TradingCostInfo(BaseModel):
+    spread_cost: float = 0
+    impact_cost: float = 0
+    commission: float = 0
+    total_cost: float = 0
+    slippage_pct: float = 0
+
+
 class TradeResponse(BaseModel):
     id: str
     idea_id: str | None
@@ -48,6 +56,7 @@ class TradeResponse(BaseModel):
     fill_quantity: float | None
     pnl: float | None
     notes: str | None
+    trading_cost: TradingCostInfo | None = None
     created_at: str
     updated_at: str
 
@@ -121,6 +130,18 @@ def _trade_to_response(trade: Trade) -> TradeResponse:
     # Instrument type mapping
     instrument = _INSTRUMENT_DB_TO_API.get(trade.instrument_type, "stock")
 
+    # Extract trading cost metadata if present
+    trading_cost = None
+    if meta.get("trading_cost") or meta.get("total_cost"):
+        tc = meta.get("trading_cost", {})
+        trading_cost = TradingCostInfo(
+            spread_cost=tc.get("spread_cost", 0) if tc else meta.get("spread_cost", 0),
+            impact_cost=tc.get("impact_cost", 0) if tc else meta.get("impact_cost", 0),
+            commission=tc.get("commission", 0) if tc else meta.get("commission", 0),
+            total_cost=tc.get("total_cost", 0) if tc else meta.get("total_cost", 0),
+            slippage_pct=tc.get("slippage_pct", 0) if tc else meta.get("slippage_pct", 0),
+        )
+
     return TradeResponse(
         id=trade.id,
         idea_id=trade.idea_id,
@@ -136,6 +157,7 @@ def _trade_to_response(trade: Trade) -> TradeResponse:
         fill_quantity=meta.get("fill_quantity") or (trade.quantity if trade.status in (TradeStatus.OPEN, TradeStatus.CLOSED) else None),
         pnl=trade.pnl,
         notes=meta.get("notes"),
+        trading_cost=trading_cost,
         created_at=_dt_iso(trade.created_at),
         updated_at=_dt_iso(trade.updated_at),
     )

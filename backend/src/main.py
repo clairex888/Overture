@@ -34,6 +34,12 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.error("Master user seed FAILED: %s", exc, exc_info=True)
 
+        # Add user_id column to portfolios if missing (schema migration)
+        try:
+            await _migrate_portfolio_user_id()
+        except Exception as exc:
+            logger.warning("Portfolio user_id migration skipped: %s", exc)
+
         # Migrate orphan portfolios (no user_id) to the admin user
         try:
             await _assign_orphan_portfolios()
@@ -79,6 +85,35 @@ async def _seed_master_user() -> None:
         session.add(admin)
         await session.commit()
         logger.info("Master admin account created: admin@overture.ai")
+
+
+async def _migrate_portfolio_user_id() -> None:
+    """Add user_id column to portfolios table if it doesn't exist.
+
+    create_all() only creates new tables — it never adds columns to existing
+    ones. This handles the schema migration without Alembic.
+    """
+    from sqlalchemy import text
+
+    async with async_session_factory() as session:
+        # Check if the column already exists
+        result = await session.execute(text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'portfolios' AND column_name = 'user_id'"
+        ))
+        if result.scalar_one_or_none():
+            return  # Column already exists
+
+        # Add the column
+        await session.execute(text(
+            "ALTER TABLE portfolios "
+            "ADD COLUMN user_id VARCHAR(36) REFERENCES users(id) ON DELETE CASCADE"
+        ))
+        await session.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_portfolios_user_id ON portfolios (user_id)"
+        ))
+        await session.commit()
+        logger.info("Added user_id column to portfolios table.")
 
 
 async def _assign_orphan_portfolios() -> None:

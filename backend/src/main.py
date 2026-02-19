@@ -38,13 +38,13 @@ async def lifespan(app: FastAPI):
         try:
             await _migrate_portfolio_user_id()
         except Exception as exc:
-            logger.warning("Portfolio user_id migration skipped: %s", exc)
+            logger.error("Portfolio user_id migration FAILED: %s", exc, exc_info=True)
 
         # Migrate orphan portfolios (no user_id) to the admin user
         try:
             await _assign_orphan_portfolios()
         except Exception as exc:
-            logger.warning("Orphan portfolio migration skipped: %s", exc)
+            logger.error("Orphan portfolio migration FAILED: %s", exc, exc_info=True)
 
     yield
 
@@ -92,6 +92,9 @@ async def _migrate_portfolio_user_id() -> None:
 
     create_all() only creates new tables — it never adds columns to existing
     ones. This handles the schema migration without Alembic.
+
+    The column must be UUID type (not VARCHAR) to match users.id which is
+    also UUID. PostgreSQL rejects FK constraints between mismatched types.
     """
     from sqlalchemy import text
 
@@ -104,10 +107,10 @@ async def _migrate_portfolio_user_id() -> None:
         if result.scalar_one_or_none():
             return  # Column already exists
 
-        # Add the column
+        # Add the column — must be UUID to match users.id type
         await session.execute(text(
             "ALTER TABLE portfolios "
-            "ADD COLUMN user_id VARCHAR(36) REFERENCES users(id) ON DELETE CASCADE"
+            "ADD COLUMN user_id UUID REFERENCES users(id) ON DELETE CASCADE"
         ))
         await session.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_portfolios_user_id ON portfolios (user_id)"

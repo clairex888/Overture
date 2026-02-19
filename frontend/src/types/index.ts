@@ -294,6 +294,8 @@ export interface AssetInfo {
   eps: number | null;
   description: string | null;
   updated_at: string;
+  fetched_at: string | null;
+  cached: boolean;
 }
 
 export interface NewsItem {
@@ -332,6 +334,8 @@ export interface AssetSummary {
   social_sentiment: string;
   summary: string;
   updated_at: string;
+  fetched_at: string | null;
+  cached: boolean;
 }
 
 export interface AssetAllocationTarget {

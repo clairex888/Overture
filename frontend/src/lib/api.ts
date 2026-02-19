@@ -201,14 +201,14 @@ export const marketDataAPI = {
     fetchAPI<Record<string, any>>(`/api/market-data/watchlist/${assetClass}`),
   watchlists: () =>
     fetchAPI<Record<string, string[]>>('/api/market-data/watchlists'),
-  info: (symbol: string) =>
-    fetchAPI<AssetInfo>(`/api/market-data/info/${symbol}`),
-  news: (symbol: string) =>
-    fetchAPI<NewsItem[]>(`/api/market-data/news/${symbol}`),
-  social: (symbol: string) =>
-    fetchAPI<SocialPost[]>(`/api/market-data/social/${symbol}`),
-  summary: (symbol: string) =>
-    fetchAPI<AssetSummary>(`/api/market-data/summary/${symbol}`),
+  info: (symbol: string, refresh = false) =>
+    fetchAPI<AssetInfo>(`/api/market-data/info/${symbol}${refresh ? '?refresh=true' : ''}`),
+  news: (symbol: string, refresh = false) =>
+    fetchAPI<NewsItem[]>(`/api/market-data/news/${symbol}${refresh ? '?refresh=true' : ''}`),
+  social: (symbol: string, refresh = false) =>
+    fetchAPI<SocialPost[]>(`/api/market-data/social/${symbol}${refresh ? '?refresh=true' : ''}`),
+  summary: (symbol: string, refresh = false) =>
+    fetchAPI<AssetSummary>(`/api/market-data/summary/${symbol}${refresh ? '?refresh=true' : ''}`),
 };
 
 // Seed API

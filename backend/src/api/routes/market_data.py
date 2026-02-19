@@ -7,6 +7,7 @@ and crypto using yfinance. Provides price snapshots and OHLCV history.
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Any
 
@@ -16,6 +17,36 @@ from pydantic import BaseModel, Field
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# In-memory cache with 1-day TTL for asset detail endpoints
+# ---------------------------------------------------------------------------
+
+_CACHE_TTL_SECONDS = 86400  # 24 hours
+
+# Cache structure: {cache_key: {"data": <serialized>, "fetched_at": <iso>, "ts": <unix>}}
+_asset_cache: dict[str, dict[str, Any]] = {}
+
+
+def _cache_key(endpoint: str, symbol: str) -> str:
+    return f"{endpoint}:{symbol.upper()}"
+
+
+def _cache_get(endpoint: str, symbol: str) -> dict[str, Any] | None:
+    """Return cached entry if it exists and hasn't expired."""
+    key = _cache_key(endpoint, symbol)
+    entry = _asset_cache.get(key)
+    if entry is None:
+        return None
+    if time.time() - entry["ts"] > _CACHE_TTL_SECONDS:
+        del _asset_cache[key]
+        return None
+    return entry
+
+
+def _cache_set(endpoint: str, symbol: str, data: Any, fetched_at: str) -> None:
+    key = _cache_key(endpoint, symbol)
+    _asset_cache[key] = {"data": data, "fetched_at": fetched_at, "ts": time.time()}
 
 # ---------------------------------------------------------------------------
 # Watchlists (default tickers for each asset class)
@@ -282,6 +313,8 @@ class AssetInfo(BaseModel):
     eps: float | None
     description: str | None
     updated_at: str
+    fetched_at: str | None = None
+    cached: bool = False
 
 
 class NewsItem(BaseModel):
@@ -320,11 +353,24 @@ class AssetSummary(BaseModel):
     social_sentiment: str
     summary: str
     updated_at: str
+    fetched_at: str | None = None
+    cached: bool = False
 
 
 @router.get("/info/{symbol}", response_model=AssetInfo)
-async def get_asset_info(symbol: str):
-    """Get comprehensive fundamental information for a ticker."""
+async def get_asset_info(
+    symbol: str,
+    refresh: bool = Query(False, description="Force refresh, bypassing cache"),
+):
+    """Get comprehensive fundamental information for a ticker (cached 24h)."""
+    if not refresh:
+        cached = _cache_get("info", symbol)
+        if cached:
+            data = cached["data"]
+            data["cached"] = True
+            data["fetched_at"] = cached["fetched_at"]
+            return AssetInfo(**data)
+
     def _sync_fetch():
         try:
             ticker = yf.Ticker(symbol.upper())
@@ -378,12 +424,25 @@ async def get_asset_info(symbol: str):
                 description=None, updated_at=_now_iso(),
             )
 
-    return await asyncio.to_thread(_sync_fetch)
+    result = await asyncio.to_thread(_sync_fetch)
+    result_dict = result.model_dump()
+    fetched_at = result_dict["updated_at"]
+    result_dict["fetched_at"] = fetched_at
+    result_dict["cached"] = False
+    _cache_set("info", symbol, result_dict, fetched_at)
+    return AssetInfo(**result_dict)
 
 
 @router.get("/news/{symbol}", response_model=list[NewsItem])
-async def get_asset_news(symbol: str):
-    """Get latest news for a ticker from RSS feeds."""
+async def get_asset_news(
+    symbol: str,
+    refresh: bool = Query(False, description="Force refresh, bypassing cache"),
+):
+    """Get latest news for a ticker from RSS feeds (cached 24h)."""
+    if not refresh:
+        cached = _cache_get("news", symbol)
+        if cached:
+            return [NewsItem(**item) for item in cached["data"]]
     import aiohttp
     import feedparser
     import re
@@ -455,12 +514,21 @@ async def get_asset_news(symbol: str):
             seen_titles.add(short_title)
             unique_items.append(item)
 
-    return unique_items[:20]
+    result = unique_items[:20]
+    _cache_set("news", symbol, [item.model_dump() for item in result], _now_iso())
+    return result
 
 
 @router.get("/social/{symbol}", response_model=list[SocialPost])
-async def get_asset_social(symbol: str):
-    """Get latest Reddit posts mentioning a ticker."""
+async def get_asset_social(
+    symbol: str,
+    refresh: bool = Query(False, description="Force refresh, bypassing cache"),
+):
+    """Get latest Reddit posts mentioning a ticker (cached 24h)."""
+    if not refresh:
+        cached = _cache_get("social", symbol)
+        if cached:
+            return [SocialPost(**item) for item in cached["data"]]
     import aiohttp
 
     symbol_upper = symbol.upper()
@@ -520,16 +588,29 @@ async def get_asset_social(symbol: str):
 
     # Sort by score descending
     all_posts.sort(key=lambda p: p.score, reverse=True)
-    return all_posts[:20]
+    result = all_posts[:20]
+    _cache_set("social", symbol, [post.model_dump() for post in result], _now_iso())
+    return result
 
 
 @router.get("/summary/{symbol}", response_model=AssetSummary)
-async def get_asset_summary(symbol: str):
-    """Generate an AI-style summary for a ticker based on available data.
+async def get_asset_summary(
+    symbol: str,
+    refresh: bool = Query(False, description="Force refresh, bypassing cache"),
+):
+    """Generate an AI-style summary for a ticker (cached 24h).
 
     Uses fundamental data and price action to create a structured outlook.
     In production this would invoke an LLM; for now it uses rule-based analysis.
     """
+    if not refresh:
+        cached = _cache_get("summary", symbol)
+        if cached:
+            data = cached["data"]
+            data["cached"] = True
+            data["fetched_at"] = cached["fetched_at"]
+            return AssetSummary(**data)
+
     def _sync_generate():
         try:
             ticker = yf.Ticker(symbol.upper())
@@ -654,4 +735,10 @@ async def get_asset_summary(symbol: str):
                 updated_at=_now_iso(),
             )
 
-    return await asyncio.to_thread(_sync_generate)
+    result = await asyncio.to_thread(_sync_generate)
+    result_dict = result.model_dump()
+    fetched_at = result_dict["updated_at"]
+    result_dict["fetched_at"] = fetched_at
+    result_dict["cached"] = False
+    _cache_set("summary", symbol, result_dict, fetched_at)
+    return AssetSummary(**result_dict)

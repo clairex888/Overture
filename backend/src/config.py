@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     anthropic_api_key: str = ""
     default_llm_provider: str = "openai"
-    openai_model: str = "gpt-4o"
-    anthropic_model: str = "claude-sonnet-4-20250514"
+    openai_model: str = "gpt-4.1"
+    anthropic_model: str = "claude-sonnet-4-6"
 
     # Data Sources
     alpha_vantage_api_key: str = ""

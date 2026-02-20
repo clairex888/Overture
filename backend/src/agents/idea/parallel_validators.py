@@ -35,6 +35,38 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+import re
+
+def _extract_tickers(idea: dict) -> list[str]:
+    """Extract ticker symbols from an idea dict.
+
+    Looks in 'tickers' (list or comma-sep string), 'ticker' (single),
+    and falls back to scanning the thesis/title for $TICKER patterns.
+    """
+    tickers: list[str] = []
+
+    # Explicit tickers field
+    raw = idea.get("tickers", idea.get("ticker", []))
+    if isinstance(raw, str):
+        tickers = [t.strip().upper() for t in raw.split(",") if t.strip()]
+    elif isinstance(raw, list):
+        for t in raw:
+            if isinstance(t, str) and t.strip():
+                tickers.append(t.strip().upper())
+
+    # Scan thesis / title for $TICKER patterns
+    if not tickers:
+        text = f"{idea.get('title', '')} {idea.get('thesis', '')}"
+        found = re.findall(r"\$([A-Z]{1,5})\b", text)
+        tickers = list(dict.fromkeys(found))  # dedupe, preserve order
+
+    return tickers[:10]  # cap at 10
+
+
+# ---------------------------------------------------------------------------
 # Validation result types
 # ---------------------------------------------------------------------------
 
@@ -144,7 +176,12 @@ class BaseValidator(BaseAgent):
 # ---------------------------------------------------------------------------
 
 class BacktestValidator(BaseValidator):
-    """Validates ideas by checking historical base rates and backtest evidence."""
+    """Validates ideas using real backtests and LLM analysis.
+
+    Step 1: LLM decides WHICH backtest to run and what defines success
+    Step 2: Tools execute the actual backtest computation
+    Step 3: LLM interprets results and scores the idea
+    """
 
     def __init__(self) -> None:
         super().__init__(
@@ -157,20 +194,63 @@ class BacktestValidator(BaseValidator):
         if self._llm is None:
             return ValidationScore(lens="backtest", score=0.5)
 
+        tickers = _extract_tickers(idea)
+
+        # Step 1: Run real backtests using tools (if we have tickers)
+        tool_results: list[dict] = []
+        if tickers:
+            try:
+                from src.services.validation_tools import (
+                    backtest_momentum, backtest_mean_revert, get_price_levels
+                )
+
+                timeframe = idea.get("timeframe", "medium_term")
+                # Choose backtest type based on thesis characteristics
+                thesis = idea.get("thesis", "").lower()
+
+                tasks = []
+                if any(w in thesis for w in ("momentum", "trend", "breakout", "rally")):
+                    tasks.append(backtest_momentum(tickers, entry_rule="price_above_sma_50"))
+                if any(w in thesis for w in ("oversold", "revert", "bounce", "dip", "value")):
+                    tasks.append(backtest_mean_revert(tickers))
+                if not tasks:
+                    # Default: run both
+                    tasks.append(backtest_momentum(tickers))
+                    tasks.append(backtest_mean_revert(tickers))
+
+                # Always get price levels for context
+                tasks.append(get_price_levels(tickers[0]))
+
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for r in results:
+                    if not isinstance(r, Exception) and r.success:
+                        tool_results.append(r.to_dict())
+            except ImportError:
+                pass
+            except Exception:
+                logger.debug("Backtest tools failed", exc_info=True)
+
+        # Step 2: LLM interprets real data + applies reasoning
+        tool_context = ""
+        if tool_results:
+            tool_context = f"\nREAL BACKTEST RESULTS (from tools):\n{json.dumps(tool_results, default=str, indent=2)}\n"
+
         prompt = (
-            "You are a quantitative analyst evaluating an investment idea through "
-            "a historical backtest lens. Analyze:\n\n"
-            "1. HISTORICAL BASE RATE: How often has this type of trade worked "
-            "historically? What's the win rate for similar setups?\n"
-            "2. BACKTEST EVIDENCE: If you were to backtest this thesis over the "
-            "last 5-10 years, what would the approximate results be?\n"
-            "3. REGIME SENSITIVITY: Does this strategy work in all market regimes "
-            "or only specific conditions? Are we in the right regime now?\n"
-            "4. SAMPLE SIZE: Is there enough historical data to have confidence?\n\n"
-            f"IDEA: {json.dumps(idea, default=str)}\n\n"
+            "You are a quantitative analyst evaluating an investment idea. "
+            "You have access to real backtest results from tools.\n\n"
+            "Analyze critically:\n"
+            "1. BACKTEST EVIDENCE: What do the actual numbers show? Win rate, "
+            "Sharpe, max drawdown. Is the edge statistically significant?\n"
+            "2. What SPECIFIC METRICS define success for this type of trade? "
+            "(e.g., momentum trade needs >55% win rate and >1.5 Sharpe)\n"
+            "3. REGIME SENSITIVITY: Does this work in current conditions?\n"
+            "4. SAMPLE SIZE: Enough trades to be confident?\n\n"
+            f"IDEA: {json.dumps(idea, default=str)}\n"
+            f"{tool_context}\n"
             f"MARKET CONTEXT: {json.dumps(context.market_context, default=str)}\n\n"
             "Respond with JSON: {\"score\": 0.0-1.0, \"analysis\": \"...\", "
-            "\"historical_win_rate\": 0.0-1.0, \"regime_match\": true/false, "
+            "\"success_metrics\": {\"metric_name\": \"threshold\"}, "
+            "\"backtest_summary\": \"what the data actually shows\", "
             "\"flags\": [\"list of concerns\"]}"
         )
 
@@ -180,6 +260,7 @@ class BacktestValidator(BaseValidator):
                 temperature=0.3, max_tokens=1024,
             )
             result = self._parse_score(response.content)
+            result["tool_results"] = tool_results  # Preserve for inspection
             return ValidationScore(
                 lens="backtest",
                 score=min(max(float(result.get("score", 0.5)), 0.0), 1.0),
@@ -197,7 +278,12 @@ class BacktestValidator(BaseValidator):
 # ---------------------------------------------------------------------------
 
 class FundamentalValidator(BaseValidator):
-    """Validates ideas using fundamental analysis and valuation checks."""
+    """Validates ideas using real fundamental data + LLM analysis.
+
+    Step 1: Fetch REAL fundamentals (P/E, EPS, margins) from tools
+    Step 2: LLM decides what valuation metrics matter for this thesis
+    Step 3: LLM scores the idea against the real data
+    """
 
     def __init__(self) -> None:
         super().__init__(
@@ -210,6 +296,34 @@ class FundamentalValidator(BaseValidator):
         if self._llm is None:
             return ValidationScore(lens="fundamental", score=0.5)
 
+        tickers = _extract_tickers(idea)
+
+        # Step 1: Fetch real fundamental data
+        tool_results: list[dict] = []
+        if tickers:
+            try:
+                from src.services.validation_tools import (
+                    get_fundamentals, get_valuation_multiples, check_short_interest
+                )
+                tasks = [get_fundamentals(tickers)]
+                if len(tickers) == 1:
+                    tasks.append(get_valuation_multiples(tickers[0]))
+                    tasks.append(check_short_interest(tickers[0]))
+
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for r in results:
+                    if not isinstance(r, Exception) and r.success:
+                        tool_results.append(r.to_dict())
+            except ImportError:
+                pass
+            except Exception:
+                logger.debug("Fundamental tools failed", exc_info=True)
+
+        # Step 2: LLM analyzes with real data
+        tool_context = ""
+        if tool_results:
+            tool_context = f"\nREAL FUNDAMENTAL DATA (from tools):\n{json.dumps(tool_results, default=str, indent=2)}\n"
+
         knowledge_text = ""
         if context.knowledge_context:
             fund_k = [k for k in context.knowledge_context
@@ -218,20 +332,22 @@ class FundamentalValidator(BaseValidator):
                 knowledge_text = f"\nKNOWLEDGE:\n{json.dumps(fund_k[:3], default=str)}"
 
         prompt = (
-            "You are a fundamental equity analyst evaluating an investment idea. "
-            "Analyze:\n\n"
-            "1. VALUATION: Is the current valuation reasonable given the thesis? "
-            "What P/E, EV/EBITDA, or other metrics are relevant?\n"
-            "2. CATALYST: Is the catalyst specific, material, and time-bound? "
-            "Could it move the stock meaningfully?\n"
-            "3. EARNINGS IMPACT: How would this thesis affect earnings? "
-            "Is the market already pricing this in?\n"
-            "4. COMPETITIVE DYNAMICS: What are the competitive moats or threats?\n"
-            "5. FINANCIAL HEALTH: Debt levels, cash flow, and balance sheet risk?\n\n"
+            "You are a fundamental equity analyst. You have REAL financial data "
+            "from tools. Critically analyze:\n\n"
+            "1. VALUATION: Given the actual P/E, EPS, and multiples, is this "
+            "fairly valued? SPECIFY which metrics matter most for this thesis "
+            "(e.g., 'for a growth story, forward P/E < 30 and revenue growth > 20% "
+            "would make this attractive').\n"
+            "2. CATALYST: Is the catalyst specific, material, and time-bound?\n"
+            "3. FINANCIAL HEALTH: Real debt/equity, margins, ROE from data.\n"
+            "4. What SPECIFIC fundamental thresholds define success? "
+            "(e.g., 'EPS growth > 15%' or 'P/E expansion from 12x to 15x')\n\n"
             f"IDEA: {json.dumps(idea, default=str)}\n"
+            f"{tool_context}"
             f"{knowledge_text}\n\n"
             "Respond with JSON: {\"score\": 0.0-1.0, \"analysis\": \"...\", "
-            "\"valuation_assessment\": \"...\", \"catalyst_strength\": \"...\", "
+            "\"key_metrics\": {\"metric\": \"actual_value vs threshold\"}, "
+            "\"valuation_verdict\": \"cheap|fair|expensive\", "
             "\"flags\": [\"list of concerns\"]}"
         )
 
@@ -241,6 +357,7 @@ class FundamentalValidator(BaseValidator):
                 temperature=0.3, max_tokens=1024,
             )
             result = self._parse_score(response.content)
+            result["tool_results"] = tool_results
             return ValidationScore(
                 lens="fundamental",
                 score=min(max(float(result.get("score", 0.5)), 0.0), 1.0),
@@ -315,7 +432,12 @@ class ReasoningValidator(BaseValidator):
 # ---------------------------------------------------------------------------
 
 class DataAnalysisValidator(BaseValidator):
-    """Validates ideas with statistical analysis and data quality checks."""
+    """Validates ideas with real statistical analysis and data quality checks.
+
+    Step 1: Fetch REAL volatility, correlation, and risk/reward from tools
+    Step 2: LLM interprets quantitative evidence and checks data quality
+    Step 3: LLM scores the idea against the real statistics
+    """
 
     def __init__(self) -> None:
         super().__init__(
@@ -328,30 +450,83 @@ class DataAnalysisValidator(BaseValidator):
         if self._llm is None:
             return ValidationScore(lens="data_analysis", score=0.5)
 
+        tickers = _extract_tickers(idea)
+
+        # Step 1: Fetch real quantitative data
+        tool_results: list[dict] = []
+        if tickers:
+            try:
+                from src.services.validation_tools import (
+                    get_historical_vol, check_correlation, calculate_risk_reward
+                )
+
+                tasks: list = [get_historical_vol(tickers)]
+
+                # Check correlation with portfolio if we have holdings
+                portfolio_tickers = []
+                if context.portfolio_state:
+                    positions = context.portfolio_state.get("positions", [])
+                    portfolio_tickers = [
+                        p.get("ticker", "") for p in positions
+                        if isinstance(p, dict) and p.get("ticker")
+                    ]
+                if portfolio_tickers:
+                    tasks.append(check_correlation(tickers, portfolio_tickers))
+
+                # Calculate R:R if entry/stop/target provided
+                entry = idea.get("entry_price") or idea.get("entry")
+                stop = idea.get("stop_loss") or idea.get("stop")
+                target = idea.get("target_price") or idea.get("target")
+                if entry and stop and target:
+                    try:
+                        tasks.append(calculate_risk_reward(
+                            float(entry), float(stop), float(target),
+                            float(idea.get("position_size_pct", 5.0)),
+                        ))
+                    except (ValueError, TypeError):
+                        pass
+
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for r in results:
+                    if not isinstance(r, Exception) and r.success:
+                        tool_results.append(r.to_dict())
+            except ImportError:
+                pass
+            except Exception:
+                logger.debug("Data analysis tools failed", exc_info=True)
+
+        # Step 2: LLM interprets real data
+        tool_context = ""
+        if tool_results:
+            tool_context = f"\nREAL QUANTITATIVE DATA (from tools):\n{json.dumps(tool_results, default=str, indent=2)}\n"
+
         knowledge_text = ""
         if context.knowledge_context:
             knowledge_text = f"\nKNOWLEDGE:\n{json.dumps(context.knowledge_context[:3], default=str)}"
 
         prompt = (
-            "You are a data scientist evaluating an investment idea through "
-            "quantitative analysis. Check:\n\n"
-            "1. DATA QUALITY: Are the facts and numbers in the thesis accurate? "
-            "Are there obvious data errors or misinterpretations?\n"
-            "2. STATISTICAL SIGNIFICANCE: Is the signal strong enough to act on? "
-            "What's the approximate p-value or z-score of the claimed pattern?\n"
-            "3. RISK/REWARD MATH: Does the expected value calculation make sense? "
-            "What's the approximate Sharpe ratio or risk/reward ratio?\n"
-            "4. CORRELATION ANALYSIS: How correlated is this trade with the "
-            "existing portfolio? Would it add diversification?\n"
-            "5. MARKET MICROSTRUCTURE: Liquidity, bid-ask spreads, market impact "
-            "for the proposed position size.\n\n"
+            "You are a data scientist evaluating an investment idea. You have "
+            "REAL quantitative data from tools (volatility, correlation, R:R). "
+            "Critically analyze:\n\n"
+            "1. DATA QUALITY: Are the facts in the thesis accurate? "
+            "Do the real numbers from tools match the thesis claims?\n"
+            "2. VOLATILITY: Given the actual vol, is the position sized correctly? "
+            "Is the expected move realistic for the timeframe?\n"
+            "3. RISK/REWARD: If R:R data available, is it attractive? "
+            "DEFINE what R:R is needed for this trade type.\n"
+            "4. CORRELATION: Does this trade add diversification or "
+            "pile onto existing exposure? Use real correlation data.\n"
+            "5. STATISTICAL SIGNIFICANCE: Is the signal strong enough? "
+            "Estimate p-value or z-score.\n\n"
             f"IDEA: {json.dumps(idea, default=str)}\n"
             f"PORTFOLIO: {json.dumps(context.portfolio_state, default=str)}\n"
+            f"{tool_context}"
             f"{knowledge_text}\n\n"
             "Respond with JSON: {\"score\": 0.0-1.0, \"analysis\": \"...\", "
             "\"data_quality\": \"poor|fair|good\", "
             "\"estimated_risk_reward\": 0.0, "
             "\"portfolio_correlation\": \"low|moderate|high\", "
+            "\"vol_assessment\": \"low|normal|high|extreme\", "
             "\"flags\": [\"list of data concerns\"]}"
         )
 
@@ -361,6 +536,7 @@ class DataAnalysisValidator(BaseValidator):
                 temperature=0.3, max_tokens=1024,
             )
             result = self._parse_score(response.content)
+            result["tool_results"] = tool_results
             return ValidationScore(
                 lens="data_analysis",
                 score=min(max(float(result.get("score", 0.5)), 0.0), 1.0),

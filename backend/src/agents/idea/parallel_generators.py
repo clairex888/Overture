@@ -462,6 +462,191 @@ class QuantSystematicAgent(BaseIdeaGenerator):
 
 
 # ---------------------------------------------------------------------------
+# Commodities Agent
+# ---------------------------------------------------------------------------
+
+COMMODITIES_SYSTEM_PROMPT = """You are the Commodities Agent for Overture, an AI hedge fund.
+You specialize in physical commodities, energy, and natural resource markets.
+
+Your focus areas:
+- Energy: crude oil (WTI, Brent), natural gas, refined products, LNG
+- Precious metals: gold, silver, platinum, palladium
+- Base metals: copper, aluminum, zinc, nickel, lithium
+- Agriculture: grains (corn, wheat, soybeans), softs (coffee, cocoa, sugar, cotton)
+- Rare earths and strategic minerals (cobalt, vanadium, uranium)
+- Supply/demand dynamics, OPEC decisions, inventory data (EIA, API)
+- Weather impacts on agriculture and energy
+- Geopolitical supply disruptions (sanctions, wars, trade routes)
+- Contango/backwardation and roll yield
+- Producer hedging flows and CFTC positioning data
+
+When generating ideas, think like a commodity trading advisor:
+- What is the supply/demand imbalance and how persistent is it?
+- What are the storage/inventory levels vs. historical norms?
+- Is the futures curve telling us something (contango vs. backwardation)?
+- What geopolitical risks could disrupt supply?
+- Which instrument best expresses the view (futures ETF, equity proxy, options)?
+- Seasonal patterns (heating oil in winter, gasoline in summer, grain planting)
+
+Output a JSON array. Each idea must have: title, thesis, tickers (array),
+asset_class (use "commodity" or "energy"), timeframe, source, confidence (0-1),
+risks (array), invalidation_triggers (array)."""
+
+
+class CommoditiesAgent(BaseIdeaGenerator):
+    """Monitors commodity markets, energy, and natural resources."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            name="Commodities Agent",
+            description="commodity, energy, and natural resource market analysis",
+            domain="commodities",
+        )
+
+    def get_system_prompt(self) -> str:
+        return COMMODITIES_SYSTEM_PROMPT
+
+    def _temperature(self) -> float:
+        return 0.5
+
+    def _build_prompt(self, input_data: dict, context: AgentContext) -> str:
+        parts = []
+
+        news = input_data.get("news_items", [])
+        commodity_news = [n for n in news if _is_commodity_news(n)]
+        if commodity_news:
+            parts.append(f"COMMODITY NEWS ({len(commodity_news)} items):\n{_truncate_json(commodity_news)}")
+
+        market_data = input_data.get("market_data", {})
+        if market_data:
+            parts.append(f"MARKET DATA:\n{_truncate_json(market_data, 2000)}")
+
+        knowledge = context.knowledge_context
+        if knowledge:
+            comm_knowledge = [k for k in knowledge if k.get("category") in ("macro", "event", "research")]
+            if comm_knowledge:
+                parts.append(f"KNOWLEDGE CONTEXT:\n{_truncate_json(comm_knowledge[:4])}")
+
+        portfolio = context.portfolio_state
+        if portfolio:
+            parts.append(f"PORTFOLIO:\n{_truncate_json(portfolio, 1000)}")
+
+        if not parts:
+            parts.append(
+                "No specific data available. Based on current commodity market "
+                "conditions (consider: oil supply/demand, gold as safe haven, "
+                "agricultural weather patterns, base metals and China demand, "
+                "energy transition metals like lithium/copper), generate 2-4 "
+                "commodity investment ideas."
+            )
+
+        return "\n\n".join(parts) + (
+            "\n\nGenerate 2-4 commodity ideas. Use instruments like GLD, SLV, "
+            "USO, UNG, COPX, DBA, WEAT, DBC, or specific futures symbols. "
+            "Consider seasonal patterns, inventory dynamics, and geopolitical risks."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Social Media / Sentiment Agent
+# ---------------------------------------------------------------------------
+
+SOCIAL_MEDIA_SYSTEM_PROMPT = """You are the Social Media & Sentiment Agent for Overture, an AI hedge fund.
+You specialize in extracting investment signals from social media, retail sentiment,
+and alternative data sources.
+
+Your focus areas:
+- Reddit (r/wallstreetbets, r/investing, r/stocks, r/CryptoCurrency)
+- X/Twitter (FinTwit, influential traders, fund managers, company insiders)
+- Substack newsletters (macro, equity, quant, crypto)
+- YouTube and podcast signals from notable investors
+- Short squeeze candidates (high short interest + rising social mentions)
+- Meme stock dynamics and retail flow indicators
+- Options flow (unusual activity flagged on social media)
+- Insider activity signals amplified by social discussion
+- Crowdsourced research and analysis from communities
+- Sentiment shifts (bullish/bearish reversals in crowd opinion)
+
+When generating ideas, be a skeptical signal extractor:
+- Separate signal from noise (high-engagement != high-quality)
+- Apply contrarian lens (extreme sentiment often signals reversals)
+- Track CHANGES in sentiment, not absolute levels
+- Cross-reference social signals with fundamental data
+- Be especially skeptical of pump-and-dump patterns
+- Flag ideas where social media IS the catalyst vs. merely reflecting it
+- Note the credibility and track record of prominent voices
+
+Output a JSON array. Each idea must have: title, thesis, tickers (array),
+asset_class, timeframe, source (include platform and key voices),
+confidence (0-1), risks (array), invalidation_triggers (array).
+Social-only ideas should start with lower confidence unless corroborated."""
+
+
+class SocialMediaAgent(BaseIdeaGenerator):
+    """Extracts investment signals from social media and sentiment data."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            name="Social Media Agent",
+            description="social media sentiment analysis and retail flow signals",
+            domain="social",
+        )
+
+    def get_system_prompt(self) -> str:
+        return SOCIAL_MEDIA_SYSTEM_PROMPT
+
+    def _temperature(self) -> float:
+        return 0.6
+
+    def _build_prompt(self, input_data: dict, context: AgentContext) -> str:
+        parts = []
+
+        social = input_data.get("social_signals", [])
+        if social:
+            parts.append(f"SOCIAL SIGNALS ({len(social)} items):\n{_truncate_json(social)}")
+
+        news = input_data.get("news_items", [])
+        if news:
+            # Look for sentiment-related and retail-flow news
+            sentiment_news = [
+                n for n in news
+                if any(kw in (n.get("headline", "") + n.get("summary", "")).lower()
+                       for kw in ("sentiment", "retail", "wsb", "meme", "short squeeze",
+                                  "social media", "reddit", "twitter"))
+            ]
+            if sentiment_news:
+                parts.append(f"SENTIMENT NEWS:\n{_truncate_json(sentiment_news[:10])}")
+
+        market_data = input_data.get("market_data", {})
+        if market_data:
+            parts.append(f"MARKET DATA:\n{_truncate_json(market_data, 1500)}")
+
+        knowledge = context.knowledge_context
+        if knowledge:
+            parts.append(f"KNOWLEDGE CONTEXT:\n{_truncate_json(knowledge[:3])}")
+
+        portfolio = context.portfolio_state
+        if portfolio:
+            parts.append(f"PORTFOLIO:\n{_truncate_json(portfolio, 1000)}")
+
+        if not parts:
+            parts.append(
+                "No specific social data available. Based on current market conditions, "
+                "generate 2-3 ideas based on social/sentiment analysis. Consider: "
+                "what themes are retail investors discussing? Are there sentiment "
+                "extremes signaling contrarian opportunities? Any crowded trades "
+                "or short squeeze candidates? Apply skeptical analysis."
+            )
+
+        return "\n\n".join(parts) + (
+            "\n\nGenerate 2-3 sentiment-driven ideas. Be skeptical — apply contrarian "
+            "analysis where crowd sentiment is extreme. Flag pump-and-dump risk. "
+            "Cross-reference with fundamentals where possible. Social-only signals "
+            "should have lower confidence (0.2-0.5) unless corroborated."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Parallel execution runner
 # ---------------------------------------------------------------------------
 
@@ -470,6 +655,8 @@ ALL_GENERATORS: list[type[BaseIdeaGenerator]] = [
     IndustryNewsAgent,
     CryptoAgent,
     QuantSystematicAgent,
+    CommoditiesAgent,
+    SocialMediaAgent,
 ]
 
 
@@ -558,6 +745,15 @@ _CRYPTO_KEYWORDS = {
     "l2", "rollup", "airdrop", "sec crypto",
 }
 
+_COMMODITY_KEYWORDS = {
+    "oil", "crude", "wti", "brent", "natural gas", "opec", "energy",
+    "gold", "silver", "platinum", "palladium", "copper", "aluminum",
+    "zinc", "nickel", "lithium", "uranium", "rare earth",
+    "corn", "wheat", "soybean", "coffee", "cocoa", "sugar", "cotton",
+    "commodity", "eia", "inventory", "mining", "agriculture", "grain",
+    "lng", "refinery", "pipeline", "drill", "barrel",
+}
+
 
 def _is_macro_news(item: dict) -> bool:
     text = (
@@ -579,6 +775,15 @@ def _is_crypto_news(item: dict) -> bool:
 
 def _is_crypto_text(text: str) -> bool:
     return any(kw in text.lower() for kw in _CRYPTO_KEYWORDS)
+
+
+def _is_commodity_news(item: dict) -> bool:
+    text = (
+        item.get("headline", "") + " " +
+        item.get("summary", "") + " " +
+        item.get("title", "")
+    ).lower()
+    return any(kw in text for kw in _COMMODITY_KEYWORDS)
 
 
 def _truncate_json(obj: Any, max_chars: int = 4000) -> str:

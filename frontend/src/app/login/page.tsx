@@ -28,12 +28,23 @@ export default function LoginPage() {
       router.push('/');
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Authentication failed';
-      // Extract detail from API error
-      try {
-        const parsed = JSON.parse(msg.replace(/^API error \d+: /, ''));
-        setError(parsed.detail || msg);
-      } catch {
-        setError(msg);
+      // Show clear, user-friendly error messages
+      if (msg.includes('Cannot reach server')) {
+        setError('Cannot connect to the server. Please make sure the backend is running.');
+      } else if (msg.includes('API error 401')) {
+        setError('Invalid email or password.');
+      } else if (msg.includes('API error 409')) {
+        setError('This email is already registered. Try signing in instead.');
+      } else if (msg.includes('API error 403')) {
+        setError('This account has been disabled.');
+      } else {
+        // Try to extract detail from API JSON error
+        try {
+          const parsed = JSON.parse(msg.replace(/^API error \d+: /, ''));
+          setError(parsed.detail || msg);
+        } catch {
+          setError(msg);
+        }
       }
     } finally {
       setSubmitting(false);

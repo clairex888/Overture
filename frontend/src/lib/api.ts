@@ -65,11 +65,21 @@ async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> 
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const res = await fetch(`${API_BASE}${endpoint}`, {
-    ...options,
-    headers,
-    cache: 'no-store',
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${endpoint}`, {
+      ...options,
+      headers,
+      cache: 'no-store',
+    });
+  } catch (networkErr) {
+    // Network-level failure: server down, CORS block, DNS failure, etc.
+    throw new Error(
+      `Cannot reach server at ${API_BASE}. ` +
+      'Please check that the backend is running and try again.'
+    );
+  }
+
   if (!res.ok) {
     const errorBody = await res.text().catch(() => '');
     throw new Error(`API error ${res.status}: ${errorBody || res.statusText}`);
@@ -90,7 +100,31 @@ export const authAPI = {
       body: JSON.stringify({ email, password }),
     }),
   me: () => fetchAPI<UserProfile>('/api/auth/me'),
+  adminStats: () => fetchAPI<AdminStats>('/api/auth/admin/stats'),
 };
+
+// Admin types
+export interface AdminUserInfo {
+  id: string;
+  email: string;
+  display_name: string | null;
+  role: string;
+  is_active: boolean;
+  has_portfolio: boolean;
+  created_at: string;
+}
+
+export interface AdminStats {
+  total_users: number;
+  active_users: number;
+  admin_count: number;
+  users_with_portfolios: number;
+  recent_registrations: AdminUserInfo[];
+  all_users: AdminUserInfo[];
+  idea_count: number;
+  trade_count: number;
+  knowledge_count: number;
+}
 
 // Ideas API
 export const ideasAPI = {

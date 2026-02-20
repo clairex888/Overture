@@ -74,15 +74,20 @@ Overture/
 ├── backend/                      Python / FastAPI
 │   ├── src/
 │   │   ├── agents/
+│   │   │   ├── base.py           BaseAgent + AgentContext shared across all agents
+│   │   │   ├── engine.py         AgentEngine singleton (loop lifecycle management)
 │   │   │   ├── llm/              Multi-provider LLM (OpenAI + Anthropic)
-│   │   │   │   ├── router.py     Task-based routing: reasoning->Anthropic, extraction->OpenAI
+│   │   │   │   ├── base.py       LLMMessage, LLMResponse — provider-agnostic interface
+│   │   │   │   ├── router.py     Task-based routing: reasoning→Anthropic, extraction→OpenAI
 │   │   │   │   ├── openai_provider.py    AsyncOpenAI client (GPT-4o)
 │   │   │   │   └── anthropic_provider.py AsyncAnthropic client (Claude Sonnet)
 │   │   │   ├── orchestrator/     LangGraph loops + coordinator
 │   │   │   │   ├── coordinator.py  OvertureCoordinator (master orchestrator)
-│   │   │   │   ├── idea_loop.py    StateGraph: generate->validate->execute->approve->monitor
-│   │   │   │   └── portfolio_loop.py StateGraph: assess->construct->risk->rebalance
-│   │   │   ├── idea/             Generator, Validator, Executor, Monitor agents
+│   │   │   │   ├── idea_loop.py    StateGraph: generate→validate→execute→approve→monitor
+│   │   │   │   └── portfolio_loop.py StateGraph: assess→construct→risk→rebalance
+│   │   │   ├── idea/             Parallel idea generation + validation agents
+│   │   │   │   ├── parallel_generators.py   6 parallel LLM generators (see Agent Architecture)
+│   │   │   │   └── parallel_validators.py   4 parallel tool-augmented validators
 │   │   │   ├── portfolio/        Constructor, Risk Manager, Rebalancer, Monitor agents
 │   │   │   ├── knowledge/        Data Curator, Educator, Librarian agents
 │   │   │   └── context/          Investment best practices framework
@@ -93,20 +98,27 @@ Overture/
 │   │   │   │   └── reddit.py         Reddit public API (5 subreddits)
 │   │   │   └── market_data.py    Redis-cached data manager with TTLs
 │   │   ├── models/               SQLAlchemy ORM (10 PostgreSQL tables)
+│   │   │   ├── user.py           User model with roles (admin/user)
 │   │   │   ├── idea.py           Ideas with status pipeline
 │   │   │   ├── trade.py          Trades with approval workflow
-│   │   │   ├── portfolio.py      Portfolio + Positions
-│   │   │   ├── knowledge.py      Knowledge entries + Market outlooks
+│   │   │   ├── portfolio.py      Portfolio + Positions (per-user scoped)
+│   │   │   ├── knowledge.py      Knowledge entries + Market outlooks (with upload/privacy)
 │   │   │   ├── agent_state.py    Agent logs (with token tracking) + Task queue
 │   │   │   └── rl.py             RL experiences + episodes
-│   │   ├── services/             Backtest, valuation (DCF/comps), risk, screening
+│   │   ├── services/
+│   │   │   ├── data_pipeline.py  Centralized data pipeline (see Data Flow Architecture)
+│   │   │   ├── validation_tools.py  9 deterministic tools for validators (see Validation Tools)
+│   │   │   ├── backtest.py       Full backtest engine
+│   │   │   ├── screening.py      Stock screening engine
+│   │   │   └── risk.py           Risk calculations
 │   │   ├── rl/                   RL environment, state, actions, rewards, replay buffer
 │   │   └── api/
-│   │       ├── routes/           9 route modules + WebSocket
+│   │       ├── routes/           10 route modules + WebSocket
+│   │       │   ├── auth.py       Register, login, profile, admin stats
 │   │       │   ├── ideas.py      CRUD + generate/validate/execute (DB-backed)
 │   │       │   ├── portfolio.py  Overview, positions, risk, allocation, preferences (DB-backed)
 │   │       │   ├── trades.py     CRUD + approve/reject/close (DB-backed)
-│   │       │   ├── knowledge.py  CRUD + outlook + data pipeline (DB-backed)
+│   │       │   ├── knowledge.py  CRUD + outlook + file upload + RAG pipeline (DB-backed)
 │   │       │   ├── agents.py     Agent status, idea-loop start/stop, portfolio-loop start/stop
 │   │       │   ├── market_data.py Price, OHLCV history, watchlists, asset info/news/social/summary
 │   │       │   ├── alerts.py     Alert feed + dismiss
@@ -116,20 +128,166 @@ Overture/
 │   └── tests/
 ├── frontend/                     Next.js 14 + Tailwind (dark theme)
 │   └── src/
-│       ├── app/                  12 pages (dashboard, ideas, portfolio, trades, agents, etc.)
+│       ├── app/                  13 pages (dashboard, ideas, portfolio, trades, agents, admin, etc.)
 │       │   ├── page.tsx          Dashboard with system controls toggles
 │       │   ├── ideas/            Ideas pipeline + preferences sub-page
-│       │   ├── portfolio/        Portfolio view + preferences sub-page
+│       │   ├── portfolio/        Portfolio view + preferences + proposal sub-pages
 │       │   ├── trades/           Trade management
 │       │   ├── agents/           Agent monitoring
-│       │   ├── knowledge/        Knowledge base
+│       │   ├── knowledge/        Knowledge base with file upload
+│       │   ├── admin/            Admin dashboard (admin-only, user stats + platform metrics)
 │       │   ├── rl/               RL training
+│       │   ├── login/            Auth page (sign in / register)
 │       │   └── asset/[symbol]/   Single asset detail (info, news, social, AI summary)
-│       ├── components/           Sidebar, StatCard, AlertFeed, PortfolioChart
-│       ├── lib/                  API client (9 API modules), WebSocket client
-│       └── types/                27+ TypeScript interfaces
+│       ├── components/           Sidebar, StatCard, AlertFeed, PortfolioChart, AuthProvider
+│       ├── lib/                  API client (10 API modules), WebSocket client
+│       └── types/                30+ TypeScript interfaces
 ├── docker-compose.yml            PostgreSQL 16 + Redis 7
 └── .env.example                  Configuration template
+```
+
+---
+
+## Agent Architecture
+
+The system uses **parallel multi-agent** architecture where specialized agents run concurrently at each stage. This is fundamentally different from a single-agent pipeline — each domain expert contributes independently, then results are aggregated.
+
+### Idea Generation: 6 Parallel Agents
+
+```
+                  ┌─────────────────────────────────┐
+                  │     Centralized Data Pipeline    │
+                  │  (DataSnapshot: news, prices,    │
+                  │   social, screens, commodities,  │
+                  │   crypto — collected ONCE)        │
+                  └──────────────┬──────────────────┘
+                                 │ same snapshot
+       ┌─────────┬──────────┬────┴────┬──────────┬──────────┐
+       ▼         ▼          ▼         ▼          ▼          ▼
+  ┌─────────┐┌─────────┐┌────────┐┌────────┐┌──────────┐┌─────────┐
+  │  Macro  ││Industry ││ Crypto ││ Quant  ││Commodity ││ Social  │
+  │  News   ││  News   ││ Agent  ││Systema ││  Agent   ││ Media   │
+  │  Agent  ││  Agent  ││        ││tic     ││          ││ Agent   │
+  └────┬────┘└────┬────┘└───┬────┘└───┬────┘└────┬─────┘└────┬────┘
+       │         │         │         │          │           │
+       └─────────┴─────────┴────┬────┴──────────┴───────────┘
+                                │
+                          deduplicate
+                          + merge
+                                │
+                         Raw Ideas Pool
+```
+
+| Agent | Domain | Key Focus |
+|-------|--------|-----------|
+| **MacroNewsAgent** | Macro/rates/yields | Fed policy, GDP, inflation, yield curve, cross-asset flows |
+| **IndustryNewsAgent** | Sectors/earnings | Earnings surprises, M&A, sector rotation, analyst upgrades |
+| **CryptoAgent** | Digital assets | On-chain metrics, DeFi flows, regulatory catalysts, BTC dominance |
+| **QuantSystematicAgent** | Quantitative signals | Screen results, factor momentum, stat-arb, vol surface anomalies |
+| **CommoditiesAgent** | Physical commodities | Energy (oil/gas), metals (gold/copper), agriculture, inventory reports, OPEC |
+| **SocialMediaAgent** | Sentiment/contrarian | Reddit/X buzz, retail positioning, contrarian signals, narrative shifts |
+
+Each agent has its own **system prompt** defining its analytical persona and domain keywords. Agents filter the shared DataSnapshot to extract domain-relevant data, then use the LLM to generate ideas with confidence scores.
+
+### Centralized Data Pipeline
+
+Why centralized over per-agent fetching:
+
+1. **No redundant API calls** — 6 agents × same API = 6x cost without centralization
+2. **Consistent snapshot** — all agents analyze the exact same data simultaneously
+3. **Rate limit management** in ONE place instead of distributed chaos
+4. **Agents focus on ANALYSIS**, not data collection
+
+```
+External APIs ──→ DataPipeline.collect() ──→ DataSnapshot
+                                                  │
+    ┌─────────────────────────────────────────────┘
+    ├──→ NewsCollector     → news_items[]
+    ├──→ MarketDataCollector → prices{}, changes{} (yfinance batch)
+    ├──→ SocialCollector   → social_signals[]
+    └──→ ScreenCollector   → screen_results[]
+```
+
+### Idea Validation: 4 Parallel Tool-Augmented Validators
+
+```
+                    Raw Idea
+                       │
+       ┌───────────┬───┴───┬──────────────┐
+       ▼           ▼       ▼              ▼
+  ┌─────────┐┌─────────┐┌─────────┐┌──────────┐
+  │Backtest ││Fundament││Reasoning││  Data    │
+  │Validator││Validator ││Validator││ Analysis │
+  │         ││         ││         ││Validator │
+  │ Tools:  ││ Tools:  ││ (pure   ││ Tools:   │
+  │ backtest││ get_    ││  LLM    ││ get_vol  │
+  │ _moment.││ fundamen││  logic  ││ check_   │
+  │ _mean_  ││ _multip.││  check) ││ correlat.│
+  │ _price  ││ _short  ││         ││ calc_rr  │
+  └────┬────┘└────┬────┘└────┬────┘└────┬─────┘
+       │         │          │           │
+       └─────────┴────┬─────┴───────────┘
+                      │
+              Weighted Aggregation
+           (backtest=0.20, fundamental=0.25,
+            reasoning=0.25, data_analysis=0.30)
+                      │
+              ┌───────┴───────┐
+              │  PASS ≥ 0.60  │
+              │  FAIL < 0.35  │
+              │  NEEDS_DATA   │
+              └───────────────┘
+```
+
+**Three-step validation process** (for tool-augmented validators):
+
+1. **LLM decides strategy** — What to test, what metrics define success for this specific idea
+2. **Tools execute computation** — Deterministic, real data (yfinance backtests, fundamentals, vol)
+3. **LLM interprets results** — Scores the idea against the real data
+
+### Validation Tool Registry
+
+9 deterministic tools available to all validators:
+
+| Tool | What It Computes | Data Source |
+|------|-----------------|-------------|
+| `backtest_momentum` | Win rate, Sharpe ratio, max drawdown for trend strategies | yfinance historical |
+| `backtest_mean_revert` | Win rate, avg hold time for mean-reversion Z-score strategies | yfinance historical |
+| `get_fundamentals` | P/E, EPS, margins, ROE, debt/equity for any ticker | yfinance info |
+| `get_valuation_multiples` | P/E, EV/EBITDA, PEG, P/B for sector comparison | yfinance info |
+| `calculate_risk_reward` | R:R ratio, max portfolio impact, Kelly criterion | calculated |
+| `check_correlation` | Pairwise daily return correlation vs portfolio | yfinance returns |
+| `get_historical_vol` | 30-day and 90-day annualized volatility | yfinance log returns |
+| `get_price_levels` | SMA 20/50/200, 52w range, trend classification | yfinance historical |
+| `check_short_interest` | Short % of float, days to cover, squeeze risk | yfinance info |
+
+All tools return a `ToolResult` with: `success`, `data`, `methodology`, `source`, `error`, `computed_at` — fully inspectable.
+
+### Inter-Agent Communication
+
+```
+AgentEngine (singleton)
+   │
+   ├── starts/stops idea loop ←── Dashboard toggle / API endpoint
+   │       │
+   │       ├── generate_node ─→ run_parallel_generators() ─→ 6 agents × asyncio.gather
+   │       │        │
+   │       │   DataPipeline.collect() provides DataSnapshot to all generators
+   │       │
+   │       ├── validate_node ─→ validate_idea_parallel() ─→ 4 validators × asyncio.gather
+   │       │        │                                             │
+   │       │        │                             Tools execute via TOOL_REGISTRY
+   │       │        │
+   │       ├── execute_node ─→ Trade construction (sizing, stops, instrument)
+   │       │
+   │       └── approve_node ─→ Human approval gate
+   │
+   └── starts/stops portfolio loop
+           │
+           ├── assess_node ─→ Portfolio health check
+           ├── construct_node ─→ Target allocation
+           ├── risk_node ─→ VaR, stress tests
+           └── rebalance_node ─→ Drift trades
 ```
 
 ---
@@ -163,15 +321,19 @@ Reddit (5 subs) ──aiohttp──>  data/sources/reddit.py        ──>  Red
 ### 2. Agent Processing Pipeline
 
 ```
-Data Layer ──> Idea Generator Agent ──> Raw Ideas (DB: ideas table, status=GENERATED)
+Data Pipeline ──┬──> 6 Parallel Generators ──> Raw Ideas Pool (deduplicated)
+                │     (Macro, Industry,          (DB: ideas table, status=GENERATED)
+                │      Crypto, Quant,
+                │      Commodities, Social)
+                │
+                │    Uses LLM (OpenAI or Anthropic via router.py)
+                │    Each agent filters DataSnapshot to its domain
+                v
+           4 Parallel Validators ──> Scored Ideas (status=VALIDATED or REJECTED)
                   │
-                  │ Uses LLM (OpenAI or Anthropic via router.py)
-                  │ Tools: search_news, run_screen, analyze_market_moves, search_social
-                  v
-           Idea Validator Agent ──> Validated/Rejected Ideas (status=VALIDATED or REJECTED)
-                  │
-                  │ Rule-based filters + LLM sanity check
-                  │ Checks: confidence threshold, ticker blacklist, position capacity
+                  │ Each validator: LLM decides strategy → Tools compute → LLM scores
+                  │ Tools: backtest_momentum, get_fundamentals, check_correlation, etc.
+                  │ Aggregation: weighted score across 4 lenses → PASS/FAIL/NEEDS_DATA
                   v
            Trade Executor Agent ──> Execution Plans (DB: trades table, status=PENDING_APPROVAL)
                   │
@@ -444,6 +606,8 @@ For serious deployment with exchange-quality data:
 | **Agents** | `/agents` | Dual-loop visualization, agent status, activity log, start/stop controls |
 | **Knowledge** | `/knowledge` | 3-layer knowledge view, source rankings, educational content |
 | **RL Training** | `/rl` | Reward charts, experience buffer stats, training insights |
+| **Admin** | `/admin` | Admin-only: registered users, activity stats, platform metrics |
+| **Login** | `/login` | Sign in / create account (with network error handling) |
 
 ---
 
@@ -532,6 +696,17 @@ For serious deployment with exchange-quality data:
 | `GET` | `/api/market-data/news/{symbol}` | Latest news from RSS feeds |
 | `GET` | `/api/market-data/social/{symbol}` | Reddit posts mentioning ticker |
 | `GET` | `/api/market-data/summary/{symbol}` | AI-generated market analysis & outlook |
+
+### Authentication
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/auth/register` | Create new user account |
+| `POST` | `/api/auth/login` | Login, receive JWT token |
+| `GET` | `/api/auth/me` | Get current user profile |
+| `PUT` | `/api/auth/me` | Update display name |
+| `POST` | `/api/auth/setup-admin` | Create/reset master admin account |
+| `GET` | `/api/auth/admin/stats` | Admin-only: platform stats, user list, activity counts |
 
 ### Other
 

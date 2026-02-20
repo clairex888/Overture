@@ -14,7 +14,12 @@ from typing import Any
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from src.agents.engine import agent_engine
+try:
+    from src.agents.engine import agent_engine
+    _engine_ok = True
+except Exception:
+    agent_engine = None  # type: ignore[assignment]
+    _engine_ok = False
 
 router = APIRouter()
 
@@ -68,9 +73,25 @@ def _now_iso() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _require_engine():
+    """Raise 503 if agent engine is not available."""
+    if not _engine_ok or agent_engine is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Agent engine unavailable. Check server logs for dependency issues.",
+        )
+
+
 @router.get("/status", response_model=AllAgentsStatus)
 async def get_agents_status():
     """Get the status of all agents."""
+    if not _engine_ok or agent_engine is None:
+        return AllAgentsStatus(
+            agents=[],
+            idea_loop_running=False,
+            portfolio_loop_running=False,
+            last_updated=_now_iso(),
+        )
     engine_status = agent_engine.get_agent_statuses()
     agents_data = engine_status.get("agents", {})
 
@@ -164,6 +185,7 @@ async def start_idea_loop():
     - Trade execution planning
     - Active trade monitoring
     """
+    _require_engine()
     result = await agent_engine.start_idea_loop()
 
     already_running = result.get("status") == "already_running"
@@ -183,6 +205,7 @@ async def start_idea_loop():
 @router.post("/idea-loop/stop", response_model=LoopControlResponse)
 async def stop_idea_loop():
     """Stop the idea generation loop."""
+    _require_engine()
     result = await agent_engine.stop_idea_loop()
 
     return LoopControlResponse(
@@ -204,6 +227,7 @@ async def start_portfolio_loop():
     - Drift detection and rebalancing
     - Cross-loop sync with idea loop
     """
+    _require_engine()
     result = await agent_engine.start_portfolio_loop()
 
     already_running = result.get("status") == "already_running"
@@ -222,6 +246,7 @@ async def start_portfolio_loop():
 @router.post("/portfolio-loop/stop", response_model=LoopControlResponse)
 async def stop_portfolio_loop():
     """Stop the portfolio management loop."""
+    _require_engine()
     result = await agent_engine.stop_portfolio_loop()
 
     return LoopControlResponse(

@@ -130,11 +130,11 @@ export interface AdminStats {
 export const ideasAPI = {
   list: (params?: Record<string, string>) => {
     const qs = params ? `?${new URLSearchParams(params)}` : '';
-    return fetchAPI<Idea[]>(`/api/ideas${qs}`);
+    return fetchAPI<Idea[]>(`/api/ideas/${qs}`);
   },
   get: (id: string) => fetchAPI<Idea>(`/api/ideas/${id}`),
   create: (data: Record<string, any>) =>
-    fetchAPI<Idea>('/api/ideas', {
+    fetchAPI<Idea>('/api/ideas/', {
       method: 'POST',
       body: JSON.stringify(data),
     }),
@@ -255,7 +255,7 @@ export const portfolioAPI = {
 export const tradesAPI = {
   list: (params?: Record<string, string>) => {
     const qs = params ? `?${new URLSearchParams(params)}` : '';
-    return fetchAPI<Trade[]>(`/api/trades${qs}`);
+    return fetchAPI<Trade[]>(`/api/trades/${qs}`);
   },
   get: (id: string) => fetchAPI<Trade>(`/api/trades/${id}`),
   pending: () => fetchAPI<PendingSummary>('/api/trades/pending'),
@@ -312,7 +312,7 @@ export const knowledgeAPI = {
   },
   get: (id: string) => fetchAPI<KnowledgeEntry>(`/api/knowledge/${id}`),
   create: (data: Record<string, any>) =>
-    fetchAPI<KnowledgeEntry>('/api/knowledge', {
+    fetchAPI<KnowledgeEntry>('/api/knowledge/', {
       method: 'POST',
       body: JSON.stringify(data),
     }),
@@ -366,7 +366,7 @@ export const knowledgeAPI = {
 export const alertsAPI = {
   list: (params?: Record<string, string>) => {
     const qs = params ? `?${new URLSearchParams(params)}` : '';
-    return fetchAPI<Alert[]>(`/api/alerts${qs}`);
+    return fetchAPI<Alert[]>(`/api/alerts/${qs}`);
   },
   dismiss: (id: string) =>
     fetchAPI<Record<string, any>>(`/api/alerts/${id}/dismiss`, {
@@ -403,7 +403,7 @@ export const marketDataAPI = {
 // Seed API
 export const seedAPI = {
   seed: () =>
-    fetchAPI<Record<string, any>>('/api/seed', { method: 'POST' }),
+    fetchAPI<Record<string, any>>('/api/seed/', { method: 'POST' }),
 };
 
 // RL Training API

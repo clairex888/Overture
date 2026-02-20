@@ -257,7 +257,7 @@ export const agentsAPI = {
 export const knowledgeAPI = {
   list: (params?: Record<string, string>) => {
     const qs = params ? `?${new URLSearchParams(params)}` : '';
-    return fetchAPI<KnowledgeEntry[]>(`/api/knowledge${qs}`);
+    return fetchAPI<KnowledgeEntry[]>(`/api/knowledge/${qs}`);
   },
   get: (id: string) => fetchAPI<KnowledgeEntry>(`/api/knowledge/${id}`),
   create: (data: Record<string, any>) =>
@@ -276,6 +276,38 @@ export const knowledgeAPI = {
   triggerPipeline: () =>
     fetchAPI<Record<string, any>>('/api/knowledge/data-pipeline/trigger', {
       method: 'POST',
+    }),
+  upload: async (file: File, opts: { title?: string; layer?: string; category?: string; is_public?: boolean; tags?: string }) => {
+    const token = getAuthToken();
+    const formData = new FormData();
+    formData.append('file', file);
+    if (opts.title) formData.append('title', opts.title);
+    formData.append('layer', opts.layer || 'medium_term');
+    formData.append('category', opts.category || 'research');
+    formData.append('is_public', String(opts.is_public ?? true));
+    if (opts.tags) formData.append('tags', opts.tags);
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch(`${API_BASE}/api/knowledge/upload`, {
+      method: 'POST',
+      headers,
+      body: formData,
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const errorBody = await res.text().catch(() => '');
+      throw new Error(`API error ${res.status}: ${errorBody || res.statusText}`);
+    }
+    return res.json() as Promise<KnowledgeEntry>;
+  },
+  togglePrivacy: (entryId: string, isPublic: boolean) =>
+    fetchAPI<KnowledgeEntry>(`/api/knowledge/${entryId}/privacy`, {
+      method: 'PATCH',
+      body: JSON.stringify({ is_public: isPublic }),
+    }),
+  delete: (entryId: string) =>
+    fetchAPI<{ success: boolean; message: string }>(`/api/knowledge/${entryId}`, {
+      method: 'DELETE',
     }),
 };
 

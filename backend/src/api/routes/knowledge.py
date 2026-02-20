@@ -7,13 +7,15 @@ Core data (entries + outlooks) is persisted in PostgreSQL.
 Sources and education stay in-memory (reference data).
 """
 
-from fastapi import APIRouter, HTTPException, Query, Depends
+import io
+import logging
+from fastapi import APIRouter, HTTPException, Query, Depends, UploadFile, File, Form
 from pydantic import BaseModel, Field
 from typing import Any
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.base import get_session
@@ -24,6 +26,10 @@ from src.models.knowledge import (
     MarketOutlook,
     OutlookSentiment,
 )
+from src.models.user import User
+from src.auth import get_current_user, get_optional_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -60,6 +66,10 @@ class KnowledgeEntryResponse(BaseModel):
     tags: list[str]
     created_at: str
     updated_at: str
+    is_public: bool = True
+    file_name: str | None = None
+    file_type: str | None = None
+    uploaded_by: str | None = None
 
 
 class OutlookLayer(BaseModel):
@@ -117,6 +127,10 @@ class DataPipelineResult(BaseModel):
     updated_entries: int
     errors: list[str]
     duration_ms: float
+
+
+class PrivacyUpdate(BaseModel):
+    is_public: bool
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +200,10 @@ def _entry_to_response(entry: KnowledgeEntry) -> KnowledgeEntryResponse:
         tags=entry.tags or [],
         created_at=_dt_iso(entry.created_at),
         updated_at=_dt_iso(entry.updated_at),
+        is_public=getattr(entry, "is_public", True),
+        file_name=getattr(entry, "file_name", None),
+        file_type=getattr(entry, "file_type", None),
+        uploaded_by=getattr(entry, "uploaded_by_user_id", None),
     )
 
 
@@ -221,9 +239,21 @@ async def list_knowledge(
     asset_class: str | None = Query(None, description="Filter by asset class"),
     limit: int = Query(50, ge=1, le=500),
     session: AsyncSession = Depends(get_session),
+    user: User | None = Depends(get_optional_user),
 ):
-    """List knowledge entries with optional filters."""
+    """List knowledge entries with optional filters.
+
+    Returns all public entries plus the current user's private entries.
+    """
     stmt = select(KnowledgeEntry)
+
+    # Privacy filter: public entries + user's own private entries
+    if user:
+        stmt = stmt.where(
+            or_(KnowledgeEntry.is_public.is_(True), KnowledgeEntry.uploaded_by_user_id == user.id)
+        )
+    else:
+        stmt = stmt.where(KnowledgeEntry.is_public.is_(True))
 
     if category:
         cat_enum = _CATEGORY_API_TO_DB.get(category)
@@ -236,7 +266,6 @@ async def list_knowledge(
             stmt = stmt.where(KnowledgeEntry.layer == layer_enum)
 
     if asset_class:
-        # JSON array contains check - use a simple text match
         stmt = stmt.where(KnowledgeEntry.asset_classes.contains([asset_class]))
 
     stmt = stmt.order_by(KnowledgeEntry.created_at.desc()).limit(limit)
@@ -349,6 +378,143 @@ async def create_knowledge_entry(
     session.add(entry)
     await session.flush()
     return _entry_to_response(entry)
+
+
+ALLOWED_FILE_TYPES = {
+    "text/plain": ".txt",
+    "text/markdown": ".md",
+    "text/csv": ".csv",
+    "application/pdf": ".pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+}
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+
+
+async def _extract_text(file: UploadFile, content_bytes: bytes) -> str:
+    """Extract text from an uploaded file."""
+    ct = file.content_type or ""
+    fname = (file.filename or "").lower()
+
+    # Plain text / Markdown
+    if ct.startswith("text/") or fname.endswith((".txt", ".md")):
+        return content_bytes.decode("utf-8", errors="replace")
+
+    # CSV — convert to readable text
+    if "csv" in ct or fname.endswith(".csv"):
+        import csv as csv_mod
+        text = content_bytes.decode("utf-8", errors="replace")
+        reader = csv_mod.reader(io.StringIO(text))
+        rows = list(reader)
+        if not rows:
+            return text
+        return "\n".join([", ".join(row) for row in rows[:500]])
+
+    # PDF — try PyPDF2, graceful fallback
+    if "pdf" in ct or fname.endswith(".pdf"):
+        try:
+            import PyPDF2
+            reader = PyPDF2.PdfReader(io.BytesIO(content_bytes))
+            pages = [page.extract_text() or "" for page in reader.pages[:50]]
+            return "\n\n".join(pages)
+        except ImportError:
+            return content_bytes.decode("utf-8", errors="replace")
+
+    # Fallback: try as UTF-8 text
+    return content_bytes.decode("utf-8", errors="replace")
+
+
+@router.post("/upload", response_model=KnowledgeEntryResponse, status_code=201)
+async def upload_file(
+    file: UploadFile = File(...),
+    title: str = Form(""),
+    layer: str = Form("medium_term"),
+    category: str = Form("research"),
+    is_public: bool = Form(True),
+    tags: str = Form(""),
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Upload a file (PDF, TXT, MD, CSV) to the knowledge library.
+
+    Files are public by default; set is_public=false for private entries.
+    """
+    content_bytes = await file.read()
+    if len(content_bytes) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=413, detail="File too large (max 10 MB)")
+    if len(content_bytes) == 0:
+        raise HTTPException(status_code=400, detail="File is empty")
+
+    text_content = await _extract_text(file, content_bytes)
+    if not text_content.strip():
+        raise HTTPException(status_code=400, detail="Could not extract text from file")
+
+    fname = file.filename or "uploaded_file"
+    entry_title = title.strip() or fname
+
+    layer_enum = _LAYER_API_TO_DB.get(layer, KnowledgeLayer.MID_TERM)
+    cat_enum = _CATEGORY_API_TO_DB.get(category, KnowledgeCategory.RESEARCH)
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+
+    entry = KnowledgeEntry(
+        id=str(uuid4()),
+        title=entry_title,
+        content=text_content[:50000],  # Cap at 50k chars
+        category=cat_enum,
+        layer=layer_enum,
+        source=f"User upload ({user.display_name or user.email})",
+        source_credibility_score=0.7,
+        tags=tag_list,
+        asset_classes=[],
+        tickers=[],
+        metadata_={"original_category": category},
+        uploaded_by_user_id=user.id,
+        is_public=is_public,
+        file_name=fname,
+        file_type=file.content_type,
+    )
+    session.add(entry)
+    await session.flush()
+    return _entry_to_response(entry)
+
+
+@router.patch("/{entry_id}/privacy", response_model=KnowledgeEntryResponse)
+async def toggle_privacy(
+    entry_id: str,
+    payload: PrivacyUpdate,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Toggle public/private visibility of a knowledge entry you own."""
+    result = await session.execute(
+        select(KnowledgeEntry).where(KnowledgeEntry.id == entry_id)
+    )
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    if entry.uploaded_by_user_id != user.id:
+        raise HTTPException(status_code=403, detail="You can only change privacy on your own entries")
+    entry.is_public = payload.is_public
+    await session.flush()
+    return _entry_to_response(entry)
+
+
+@router.delete("/{entry_id}", status_code=200)
+async def delete_knowledge_entry(
+    entry_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Delete a knowledge entry you own."""
+    result = await session.execute(
+        select(KnowledgeEntry).where(KnowledgeEntry.id == entry_id)
+    )
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    if entry.uploaded_by_user_id and entry.uploaded_by_user_id != user.id:
+        raise HTTPException(status_code=403, detail="You can only delete your own entries")
+    await session.delete(entry)
+    return {"success": True, "message": f"Entry '{entry.title}' deleted."}
 
 
 @router.put("/outlook/{layer}", response_model=OutlookLayer)

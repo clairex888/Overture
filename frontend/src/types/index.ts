@@ -207,6 +207,10 @@ export interface KnowledgeEntry {
   tags: string[];
   created_at: string;
   updated_at: string;
+  is_public: boolean;
+  file_name: string | null;
+  file_type: string | null;
+  uploaded_by: string | null;
 }
 
 export interface OutlookLayer {

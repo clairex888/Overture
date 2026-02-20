@@ -16,10 +16,11 @@ import {
   BarChart3,
   LogOut,
   User,
+  Shield,
 } from 'lucide-react';
 import { useAuth } from '@/components/providers/AuthProvider';
 
-const navItems = [
+const baseNavItems = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
   {
     href: '/ideas',
@@ -40,10 +41,16 @@ const navItems = [
   { href: '/rl', label: 'RL Training', icon: Brain },
 ];
 
+const adminNavItem = { href: '/admin', label: 'Admin', icon: Shield };
+
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { user, logout } = useAuth();
+
+  const navItems = user?.role === 'admin'
+    ? [...baseNavItems, adminNavItem]
+    : baseNavItems;
 
   const handleLogout = () => {
     logout();

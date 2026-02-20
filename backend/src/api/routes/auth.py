@@ -1,12 +1,12 @@
 """
 Authentication API routes.
 
-Provides register, login, and profile endpoints.
+Provides register, login, profile, and admin endpoints.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select
+from pydantic import BaseModel, Field
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import uuid4
 
@@ -175,4 +175,116 @@ async def setup_admin(session: AsyncSession = Depends(get_session)):
     return SetupAdminResponse(
         success=True,
         message="Master admin account created.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Admin endpoints (admin-only)
+# ---------------------------------------------------------------------------
+
+
+def _require_admin(user: User) -> None:
+    """Raise 403 if user is not an admin."""
+    if not user.role or user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+
+class AdminUserInfo(BaseModel):
+    id: str
+    email: str
+    display_name: str | None
+    role: str
+    is_active: bool
+    has_portfolio: bool
+    created_at: str
+
+
+class AdminStats(BaseModel):
+    total_users: int
+    active_users: int
+    admin_count: int
+    users_with_portfolios: int
+    recent_registrations: list[AdminUserInfo]
+    all_users: list[AdminUserInfo]
+    idea_count: int
+    trade_count: int
+    knowledge_count: int
+
+
+@router.get("/admin/stats", response_model=AdminStats)
+async def admin_stats(
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Get platform-wide stats. Admin only."""
+    _require_admin(user)
+
+    # User stats
+    total = (await session.execute(select(func.count()).select_from(User))).scalar() or 0
+    active = (await session.execute(
+        select(func.count()).select_from(User).where(User.is_active.is_(True))
+    )).scalar() or 0
+    admins = (await session.execute(
+        select(func.count()).select_from(User).where(User.role == UserRole.ADMIN)
+    )).scalar() or 0
+    with_portfolios = (await session.execute(
+        select(func.count()).select_from(User).where(User.portfolio_id.isnot(None))
+    )).scalar() or 0
+
+    # All users (ordered by created_at desc)
+    result = await session.execute(
+        select(User).order_by(User.created_at.desc())
+    )
+    all_users_rows = result.scalars().all()
+
+    def _to_admin_info(u: User) -> AdminUserInfo:
+        return AdminUserInfo(
+            id=u.id,
+            email=u.email,
+            display_name=u.display_name,
+            role=u.role.value if u.role else "user",
+            is_active=u.is_active,
+            has_portfolio=bool(u.portfolio_id),
+            created_at=u.created_at.isoformat() + "Z" if u.created_at else "",
+        )
+
+    all_users = [_to_admin_info(u) for u in all_users_rows]
+    recent = all_users[:10]  # 10 most recent
+
+    # Activity counts (lightweight — just row counts)
+    idea_count = 0
+    trade_count = 0
+    knowledge_count = 0
+    try:
+        from src.models.idea import Idea
+        idea_count = (await session.execute(
+            select(func.count()).select_from(Idea)
+        )).scalar() or 0
+    except Exception:
+        pass
+    try:
+        from src.models.trade import Trade
+        trade_count = (await session.execute(
+            select(func.count()).select_from(Trade)
+        )).scalar() or 0
+    except Exception:
+        pass
+    try:
+        from src.models.knowledge import KnowledgeEntry
+        knowledge_count = (await session.execute(
+            select(func.count()).select_from(KnowledgeEntry)
+        )).scalar() or 0
+    except Exception:
+        pass
+
+    return AdminStats(
+        total_users=total,
+        active_users=active,
+        admin_count=admins,
+        users_with_portfolios=with_portfolios,
+        recent_registrations=recent,
+        all_users=all_users,
+        idea_count=idea_count,
+        trade_count=trade_count,
+        knowledge_count=knowledge_count,
     )

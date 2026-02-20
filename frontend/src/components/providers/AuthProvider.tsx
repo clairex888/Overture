@@ -35,9 +35,16 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
       authAPI
         .me()
         .then(setUser)
-        .catch(() => {
-          // Token expired or invalid — clear it
-          setAuthToken(null);
+        .catch((err) => {
+          // Only clear token if it's an auth error, not a network error
+          const msg = err instanceof Error ? err.message : '';
+          if (msg.includes('Cannot reach server')) {
+            // Server down — keep token so user can reconnect later
+            console.warn('Server unreachable, keeping saved session');
+          } else {
+            // Token expired or invalid — clear it
+            setAuthToken(null);
+          }
         })
         .finally(() => setLoading(false));
     } else {

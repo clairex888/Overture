@@ -3,13 +3,23 @@ Agents API routes.
 
 Provides visibility into and control over the autonomous agent system:
 status monitoring, activity logs, loop control, and task management.
+
+Connected to the real AgentEngine singleton which manages LangGraph-based
+idea and portfolio loops with parallel specialized agents.
 """
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import Any
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
+
+try:
+    from src.agents.engine import agent_engine
+    _engine_ok = True
+except Exception:
+    agent_engine = None  # type: ignore[assignment]
+    _engine_ok = False
 
 router = APIRouter()
 
@@ -46,18 +56,6 @@ class AgentLogEntry(BaseModel):
     duration_ms: float | None = None
 
 
-class AgentTask(BaseModel):
-    id: str
-    agent_name: str
-    task_type: str
-    status: str = Field(..., description="pending, running, completed, failed, cancelled")
-    payload: dict[str, Any] = Field(default_factory=dict)
-    result: dict[str, Any] | None = None
-    created_at: str
-    started_at: str | None = None
-    completed_at: str | None = None
-
-
 class LoopControlResponse(BaseModel):
     loop: str
     action: str
@@ -66,143 +64,8 @@ class LoopControlResponse(BaseModel):
     timestamp: str
 
 
-class TaskCancelResponse(BaseModel):
-    task_id: str
-    previous_status: str
-    new_status: str
-    message: str
-
-
-# ---------------------------------------------------------------------------
-# In-memory stores (swap for DB / message bus later)
-# ---------------------------------------------------------------------------
-
-_loop_state: dict[str, bool] = {
-    "idea_loop": False,
-    "portfolio_loop": False,
-}
-
-_agent_statuses: dict[str, dict[str, Any]] = {
-    "idea_generation": {
-        "name": "idea_generation",
-        "display_name": "Idea Generation Agent",
-        "status": "idle",
-        "current_task": None,
-        "last_run": "2026-02-12T08:00:00Z",
-        "run_count": 47,
-        "error_count": 2,
-        "uptime_seconds": 86400.0,
-    },
-    "validation": {
-        "name": "validation",
-        "display_name": "Validation Agent",
-        "status": "idle",
-        "current_task": None,
-        "last_run": "2026-02-12T08:05:00Z",
-        "run_count": 35,
-        "error_count": 1,
-        "uptime_seconds": 86400.0,
-    },
-    "risk_management": {
-        "name": "risk_management",
-        "display_name": "Risk Management Agent",
-        "status": "idle",
-        "current_task": None,
-        "last_run": "2026-02-12T08:10:00Z",
-        "run_count": 120,
-        "error_count": 0,
-        "uptime_seconds": 86400.0,
-    },
-    "execution": {
-        "name": "execution",
-        "display_name": "Execution Agent",
-        "status": "idle",
-        "current_task": None,
-        "last_run": "2026-02-12T07:55:00Z",
-        "run_count": 28,
-        "error_count": 3,
-        "uptime_seconds": 86400.0,
-    },
-    "portfolio_management": {
-        "name": "portfolio_management",
-        "display_name": "Portfolio Management Agent",
-        "status": "idle",
-        "current_task": None,
-        "last_run": "2026-02-12T08:00:00Z",
-        "run_count": 52,
-        "error_count": 1,
-        "uptime_seconds": 86400.0,
-    },
-    "knowledge": {
-        "name": "knowledge",
-        "display_name": "Knowledge Agent",
-        "status": "idle",
-        "current_task": None,
-        "last_run": "2026-02-12T07:45:00Z",
-        "run_count": 200,
-        "error_count": 5,
-        "uptime_seconds": 86400.0,
-    },
-}
-
-_agent_logs: list[dict[str, Any]] = [
-    {
-        "id": str(uuid4()),
-        "timestamp": "2026-02-12T08:10:00Z",
-        "agent_name": "risk_management",
-        "action": "portfolio_risk_check",
-        "status": "completed",
-        "details": {"var_95": 15200, "alerts": 0},
-        "duration_ms": 1250.0,
-    },
-    {
-        "id": str(uuid4()),
-        "timestamp": "2026-02-12T08:05:00Z",
-        "agent_name": "validation",
-        "action": "validate_idea",
-        "status": "completed",
-        "details": {"idea_id": "sample-1", "score": 0.72},
-        "duration_ms": 3400.0,
-    },
-    {
-        "id": str(uuid4()),
-        "timestamp": "2026-02-12T08:00:00Z",
-        "agent_name": "idea_generation",
-        "action": "generate_ideas",
-        "status": "completed",
-        "details": {"count": 3, "asset_classes": ["equities", "crypto"]},
-        "duration_ms": 8500.0,
-    },
-    {
-        "id": str(uuid4()),
-        "timestamp": "2026-02-12T07:55:00Z",
-        "agent_name": "execution",
-        "action": "execute_trade",
-        "status": "failed",
-        "details": {"error": "Insufficient margin for position size"},
-        "duration_ms": 450.0,
-    },
-]
-
-_agent_tasks: dict[str, dict[str, Any]] = {}
-
-# Seed a pending task
-_sample_task_id = str(uuid4())
-_agent_tasks[_sample_task_id] = {
-    "id": _sample_task_id,
-    "agent_name": "idea_generation",
-    "task_type": "generate_ideas",
-    "status": "pending",
-    "payload": {"asset_classes": ["equities"], "count": 5},
-    "result": None,
-    "created_at": "2026-02-12T08:15:00Z",
-    "started_at": None,
-    "completed_at": None,
-}
-
-
 def _now_iso() -> str:
-    return datetime.utcnow().isoformat() + "Z"
+    return datetime.now(timezone.utc).isoformat() + "Z"
 
 
 # ---------------------------------------------------------------------------
@@ -210,13 +73,45 @@ def _now_iso() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _require_engine():
+    """Raise 503 if agent engine is not available."""
+    if not _engine_ok or agent_engine is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Agent engine unavailable. Check server logs for dependency issues.",
+        )
+
+
 @router.get("/status", response_model=AllAgentsStatus)
 async def get_agents_status():
-    """Get the status of all agents (running, idle, error, stopped)."""
+    """Get the status of all agents."""
+    if not _engine_ok or agent_engine is None:
+        return AllAgentsStatus(
+            agents=[],
+            idea_loop_running=False,
+            portfolio_loop_running=False,
+            last_updated=_now_iso(),
+        )
+    engine_status = agent_engine.get_agent_statuses()
+    agents_data = engine_status.get("agents", {})
+
+    agents: list[AgentStatus] = []
+    for key, data in agents_data.items():
+        agents.append(AgentStatus(
+            name=data.get("name", key),
+            display_name=data.get("name", key),
+            status=data.get("status", "idle"),
+            current_task=None,
+            last_run=data.get("last_run"),
+            run_count=data.get("tasks_completed", 0),
+            error_count=data.get("errors", 0),
+            uptime_seconds=0.0,
+        ))
+
     return AllAgentsStatus(
-        agents=[AgentStatus(**a) for a in _agent_statuses.values()],
-        idea_loop_running=_loop_state["idea_loop"],
-        portfolio_loop_running=_loop_state["portfolio_loop"],
+        agents=agents,
+        idea_loop_running=engine_status.get("idea_loop_running", False),
+        portfolio_loop_running=engine_status.get("portfolio_loop_running", False),
         last_updated=_now_iso(),
     )
 
@@ -228,18 +123,31 @@ async def get_agent_logs(
     status: str | None = Query(None, description="Filter by status"),
     limit: int = Query(50, ge=1, le=500),
 ):
-    """Get recent agent activity logs with optional filters."""
-    results = list(_agent_logs)
+    """Get recent agent activity logs."""
+    logs = agent_engine.get_logs(limit=limit)
+
+    results = []
+    for msg in logs:
+        entry = {
+            "id": str(uuid4()),
+            "timestamp": msg.get("timestamp", _now_iso()),
+            "agent_name": msg.get("agent", "unknown"),
+            "action": msg.get("node", msg.get("summary", "unknown")),
+            "status": "completed",
+            "details": {"summary": msg.get("summary", ""), "notes": msg.get("notes", "")},
+            "duration_ms": None,
+        }
+        results.append(entry)
 
     if agent_type:
-        results = [l for l in results if l["agent_name"] == agent_type]
+        results = [r for r in results if agent_type in r["agent_name"].lower()]
     if action:
-        results = [l for l in results if l["action"] == action]
+        results = [r for r in results if action in r["action"]]
     if status:
-        results = [l for l in results if l["status"] == status]
+        results = [r for r in results if r["status"] == status]
 
-    results.sort(key=lambda l: l["timestamp"], reverse=True)
-    return [AgentLogEntry(**l) for l in results[:limit]]
+    results.sort(key=lambda r: r["timestamp"], reverse=True)
+    return [AgentLogEntry(**r) for r in results[:limit]]
 
 
 @router.get("/logs/{agent_name}", response_model=list[AgentLogEntry])
@@ -248,200 +156,148 @@ async def get_agent_logs_by_name(
     limit: int = Query(50, ge=1, le=500),
 ):
     """Get logs for a specific agent."""
-    if agent_name not in _agent_statuses:
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+    logs = agent_engine.get_logs(limit=limit * 2)
+    results = []
+    for msg in logs:
+        agent = msg.get("agent", "")
+        if agent_name.lower() in agent.lower():
+            results.append(AgentLogEntry(
+                id=str(uuid4()),
+                timestamp=msg.get("timestamp", _now_iso()),
+                agent_name=agent,
+                action=msg.get("node", ""),
+                status="completed",
+                details={"summary": msg.get("summary", "")},
+                duration_ms=None,
+            ))
 
-    results = [l for l in _agent_logs if l["agent_name"] == agent_name]
-    results.sort(key=lambda l: l["timestamp"], reverse=True)
-    return [AgentLogEntry(**l) for l in results[:limit]]
+    results.sort(key=lambda r: r.timestamp, reverse=True)
+    return results[:limit]
 
 
 @router.post("/idea-loop/start", response_model=LoopControlResponse)
 async def start_idea_loop():
-    """Start the autonomous idea generation/validation loop.
+    """Start the autonomous idea generation loop with parallel agents.
 
-    In production this starts a background asyncio task that periodically
-    runs the IdeaGenerationAgent and ValidationAgent.
+    This starts:
+    - 4 parallel generators (macro, industry, crypto, quant)
+    - 4 parallel validators (backtest, fundamental, reasoning, data)
+    - Trade execution planning
+    - Active trade monitoring
     """
-    if _loop_state["idea_loop"]:
-        return LoopControlResponse(
-            loop="idea_loop",
-            action="start",
-            success=False,
-            message="Idea loop is already running.",
-            timestamp=_now_iso(),
-        )
+    _require_engine()
+    result = await agent_engine.start_idea_loop()
 
-    _loop_state["idea_loop"] = True
-    _agent_statuses["idea_generation"]["status"] = "running"
-    _agent_statuses["validation"]["status"] = "running"
-
-    log_entry = {
-        "id": str(uuid4()),
-        "timestamp": _now_iso(),
-        "agent_name": "idea_generation",
-        "action": "loop_started",
-        "status": "completed",
-        "details": {"loop": "idea_loop"},
-        "duration_ms": None,
-    }
-    _agent_logs.insert(0, log_entry)
-
+    already_running = result.get("status") == "already_running"
     return LoopControlResponse(
         loop="idea_loop",
         action="start",
-        success=True,
-        message="Idea loop started successfully.",
+        success=not already_running,
+        message=(
+            "Idea loop is already running." if already_running
+            else f"Idea loop started (interval={result.get('interval_seconds', 60)}s). "
+                 "4 parallel generators + 4 parallel validators active."
+        ),
         timestamp=_now_iso(),
     )
 
 
 @router.post("/idea-loop/stop", response_model=LoopControlResponse)
 async def stop_idea_loop():
-    """Stop the idea generation/validation loop."""
-    if not _loop_state["idea_loop"]:
-        return LoopControlResponse(
-            loop="idea_loop",
-            action="stop",
-            success=False,
-            message="Idea loop is not running.",
-            timestamp=_now_iso(),
-        )
-
-    _loop_state["idea_loop"] = False
-    _agent_statuses["idea_generation"]["status"] = "idle"
-    _agent_statuses["validation"]["status"] = "idle"
-
-    log_entry = {
-        "id": str(uuid4()),
-        "timestamp": _now_iso(),
-        "agent_name": "idea_generation",
-        "action": "loop_stopped",
-        "status": "completed",
-        "details": {"loop": "idea_loop"},
-        "duration_ms": None,
-    }
-    _agent_logs.insert(0, log_entry)
+    """Stop the idea generation loop."""
+    _require_engine()
+    result = await agent_engine.stop_idea_loop()
 
     return LoopControlResponse(
         loop="idea_loop",
         action="stop",
         success=True,
-        message="Idea loop stopped successfully.",
+        message=f"Idea loop stopped after {result.get('iterations', 0)} iterations.",
         timestamp=_now_iso(),
     )
 
 
 @router.post("/portfolio-loop/start", response_model=LoopControlResponse)
 async def start_portfolio_loop():
-    """Start the portfolio management/risk monitoring loop."""
-    if _loop_state["portfolio_loop"]:
-        return LoopControlResponse(
-            loop="portfolio_loop",
-            action="start",
-            success=False,
-            message="Portfolio loop is already running.",
-            timestamp=_now_iso(),
-        )
+    """Start the portfolio management loop.
 
-    _loop_state["portfolio_loop"] = True
-    _agent_statuses["portfolio_management"]["status"] = "running"
-    _agent_statuses["risk_management"]["status"] = "running"
+    This starts:
+    - Portfolio assessment and allocation
+    - Risk monitoring and alert generation
+    - Drift detection and rebalancing
+    - Cross-loop sync with idea loop
+    """
+    _require_engine()
+    result = await agent_engine.start_portfolio_loop()
 
-    log_entry = {
-        "id": str(uuid4()),
-        "timestamp": _now_iso(),
-        "agent_name": "portfolio_management",
-        "action": "loop_started",
-        "status": "completed",
-        "details": {"loop": "portfolio_loop"},
-        "duration_ms": None,
-    }
-    _agent_logs.insert(0, log_entry)
-
+    already_running = result.get("status") == "already_running"
     return LoopControlResponse(
         loop="portfolio_loop",
         action="start",
-        success=True,
-        message="Portfolio loop started successfully.",
+        success=not already_running,
+        message=(
+            "Portfolio loop is already running." if already_running
+            else f"Portfolio loop started (interval={result.get('interval_seconds', 300)}s)."
+        ),
         timestamp=_now_iso(),
     )
 
 
 @router.post("/portfolio-loop/stop", response_model=LoopControlResponse)
 async def stop_portfolio_loop():
-    """Stop the portfolio management/risk monitoring loop."""
-    if not _loop_state["portfolio_loop"]:
-        return LoopControlResponse(
-            loop="portfolio_loop",
-            action="stop",
-            success=False,
-            message="Portfolio loop is not running.",
-            timestamp=_now_iso(),
-        )
-
-    _loop_state["portfolio_loop"] = False
-    _agent_statuses["portfolio_management"]["status"] = "idle"
-    _agent_statuses["risk_management"]["status"] = "idle"
-
-    log_entry = {
-        "id": str(uuid4()),
-        "timestamp": _now_iso(),
-        "agent_name": "portfolio_management",
-        "action": "loop_stopped",
-        "status": "completed",
-        "details": {"loop": "portfolio_loop"},
-        "duration_ms": None,
-    }
-    _agent_logs.insert(0, log_entry)
+    """Stop the portfolio management loop."""
+    _require_engine()
+    result = await agent_engine.stop_portfolio_loop()
 
     return LoopControlResponse(
         loop="portfolio_loop",
         action="stop",
         success=True,
-        message="Portfolio loop stopped successfully.",
+        message=f"Portfolio loop stopped after {result.get('iterations', 0)} iterations.",
         timestamp=_now_iso(),
     )
 
 
-@router.get("/tasks", response_model=list[AgentTask])
-async def get_agent_tasks(
-    status: str | None = Query(None, description="Filter by task status"),
-):
-    """Get pending and running agent tasks."""
-    tasks = list(_agent_tasks.values())
-
-    if status:
-        tasks = [t for t in tasks if t["status"] == status]
-    else:
-        # Default: show pending and running only
-        tasks = [t for t in tasks if t["status"] in ("pending", "running")]
-
-    tasks.sort(key=lambda t: t["created_at"], reverse=True)
-    return [AgentTask(**t) for t in tasks]
+@router.get("/system-status")
+async def get_system_status():
+    """Get comprehensive system status including both loops."""
+    return agent_engine.get_status()
 
 
-@router.post("/tasks/{task_id}/cancel", response_model=TaskCancelResponse)
-async def cancel_agent_task(task_id: str):
-    """Cancel a pending or running agent task."""
-    task = _agent_tasks.get(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+@router.get("/pending-approvals")
+async def get_pending_approvals():
+    """Get trade plans awaiting human approval."""
+    return agent_engine.get_pending_approvals()
 
-    cancellable = {"pending", "running"}
-    if task["status"] not in cancellable:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot cancel task in '{task['status']}' status",
-        )
 
-    previous = task["status"]
-    task["status"] = "cancelled"
-    task["completed_at"] = _now_iso()
+@router.post("/approve/{plan_id}")
+async def approve_trade_plan(plan_id: str, adjustments: dict[str, Any] | None = None):
+    """Approve a pending trade plan."""
+    result = await agent_engine.approve_trade(plan_id, adjustments)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
 
-    return TaskCancelResponse(
-        task_id=task_id,
-        previous_status=previous,
-        new_status="cancelled",
-        message=f"Task {task_id} cancelled successfully.",
-    )
+
+@router.post("/reject/{plan_id}")
+async def reject_trade_plan(plan_id: str, reason: str = ""):
+    """Reject a pending trade plan."""
+    result = await agent_engine.reject_trade(plan_id, reason)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@router.get("/alerts")
+async def get_agent_alerts():
+    """Get active alerts from agent loops."""
+    return agent_engine.get_alerts()
+
+
+@router.post("/alerts/{alert_id}/dismiss")
+async def dismiss_agent_alert(alert_id: str):
+    """Dismiss an agent alert."""
+    dismissed = agent_engine.dismiss_alert(alert_id)
+    if not dismissed:
+        raise HTTPException(status_code=404, detail=f"Alert {alert_id} not found")
+    return {"status": "dismissed", "alert_id": alert_id}

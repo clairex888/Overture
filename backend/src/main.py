@@ -13,6 +13,15 @@ import src.models.user  # noqa: F401 — ensure User table is created
 
 logger = logging.getLogger(__name__)
 
+# Lazy-import agent engine so auth/portfolio/etc. still work if agent deps fail
+try:
+    from src.agents.engine import agent_engine
+    _agent_engine_ok = True
+except Exception as _agent_err:
+    _agent_engine_ok = False
+    agent_engine = None  # type: ignore[assignment]
+    logger.warning("Agent engine unavailable: %s — agent loops disabled", _agent_err)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -58,7 +67,15 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.error("Knowledge seed FAILED: %s", exc, exc_info=True)
 
+    if _agent_engine_ok:
+        logger.info("Agent engine ready (use /api/agents/idea-loop/start to begin)")
+    else:
+        logger.warning("Agent engine NOT available — agent features disabled")
     yield
+
+    # Shutdown: stop any running agent loops
+    if _agent_engine_ok and agent_engine is not None:
+        await agent_engine.shutdown()
 
 
 async def _seed_master_user() -> None:

@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.routes import ideas, portfolio, agents, knowledge, trades, alerts, rl, seed, market_data, auth
 from src.api.websocket import router as ws_router
+from src.agents.engine import agent_engine
 from src.config import settings
 from src.models import base as db_base
 from src.models.base import async_session_factory
@@ -58,7 +59,11 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.error("Knowledge seed FAILED: %s", exc, exc_info=True)
 
+    logger.info("Agent engine ready (use /api/agents/idea-loop/start to begin)")
     yield
+
+    # Shutdown: stop any running agent loops
+    await agent_engine.shutdown()
 
 
 async def _seed_master_user() -> None:

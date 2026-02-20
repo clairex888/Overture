@@ -28,6 +28,11 @@ from langgraph.graph import END, StateGraph
 
 from src.agents.base import AgentContext
 from src.agents.idea.generator import IdeaGeneratorAgent
+from src.agents.idea.parallel_generators import run_parallel_generators
+from src.agents.idea.parallel_validators import (
+    validate_ideas_batch,
+    ValidationThresholds,
+)
 from src.agents.llm.router import llm_router
 
 logger = logging.getLogger(__name__)
@@ -68,6 +73,9 @@ class IdeaLoopState(TypedDict):
     portfolio_state: dict
     risk_limits: dict
 
+    # -- Knowledge context (from RAG pipeline) -----------------------------
+    knowledge_context: list[dict]
+
     # -- Agent messages and coordination -----------------------------------
     agent_messages: list[dict]
 
@@ -96,6 +104,7 @@ def _default_idea_loop_state() -> IdeaLoopState:
         trade_alerts=[],
         portfolio_state={},
         risk_limits={},
+        knowledge_context=[],
         agent_messages=[],
         iteration=0,
         should_continue=True,
@@ -107,11 +116,16 @@ def _default_idea_loop_state() -> IdeaLoopState:
 # ---------------------------------------------------------------------------
 
 async def generate_node(state: IdeaLoopState) -> dict[str, Any]:
-    """Node: generate investment ideas from data sources.
+    """Node: generate investment ideas using parallel specialized agents.
 
-    Creates an ``IdeaGeneratorAgent``, feeds it the current data sources,
-    and returns the raw ideas it produces.  The agent is given an LLM
-    provider via the router so that it can call the appropriate model.
+    Runs 4 specialized generators concurrently:
+      - MacroNewsAgent: macroeconomic and global macro ideas
+      - IndustryNewsAgent: sector/company-specific equity ideas
+      - CryptoAgent: digital asset and blockchain ideas
+      - QuantSystematicAgent: factor-based and systematic strategies
+
+    Each agent receives the same input data but focuses on its domain,
+    producing ideas that are merged and deduplicated.
     """
     logger.info(
         "Idea Loop [generate] -- iteration %s, sources: news=%d market=%s social=%d screens=%d",
@@ -122,30 +136,25 @@ async def generate_node(state: IdeaLoopState) -> dict[str, Any]:
         len(state.get("screen_results", [])),
     )
 
-    agent = IdeaGeneratorAgent()
-    agent._llm = llm_router.get_provider()
+    llm = llm_router.get_provider()
 
     context = AgentContext(
         portfolio_state=state.get("portfolio_state", {}),
         market_context=state.get("market_data", {}),
+        knowledge_context=state.get("knowledge_context", []),
     )
 
     input_data = {
         "news_items": state.get("news_items", []),
         "market_data": state.get("market_data", {}),
         "social_signals": state.get("social_signals", []),
-        "screen_config": (
-            {"results": state["screen_results"]}
-            if state.get("screen_results")
-            else {}
-        ),
+        "screen_results": state.get("screen_results", []),
     }
 
     try:
-        result = await agent.execute(input_data, context)
-        raw_ideas = result.get("ideas", [])
+        raw_ideas = await run_parallel_generators(input_data, context, llm)
     except Exception:
-        logger.exception("IdeaGeneratorAgent failed")
+        logger.exception("Parallel generators failed")
         raw_ideas = []
 
     # Stamp each idea with metadata
@@ -158,23 +167,26 @@ async def generate_node(state: IdeaLoopState) -> dict[str, Any]:
         "raw_ideas": raw_ideas,
         "agent_messages": state.get("agent_messages", []) + [
             {
-                "agent": "IdeaGenerator",
+                "agent": "ParallelGenerators",
                 "node": "generate",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "summary": f"Generated {len(raw_ideas)} raw ideas",
+                "summary": f"Generated {len(raw_ideas)} raw ideas via parallel agents",
             }
         ],
     }
 
 
 async def validate_node(state: IdeaLoopState) -> dict[str, Any]:
-    """Node: validate and filter raw ideas.
+    """Node: validate raw ideas using parallel specialized validators.
 
-    In the full system the ``IdeaValidatorAgent`` performs deep due-diligence
-    on each raw idea -- cross-referencing fundamentals, checking for
-    conflicting positions, and scoring risk/reward.  For the prototype we
-    apply a confidence-threshold heuristic and delegate to the LLM for a
-    quick sanity check.
+    Runs 4 validators concurrently on each idea:
+      - BacktestValidator: historical base rate and backtest evidence
+      - FundamentalValidator: valuation and catalyst analysis
+      - ReasoningValidator: logic checking and bias detection
+      - DataAnalysisValidator: statistical and data quality checks
+
+    Scores are aggregated with configurable weights to produce a verdict:
+    PASS, FAIL, or NEEDS_MORE_DATA. Thresholds are human-adjustable.
     """
     raw_ideas = state.get("raw_ideas", [])
     risk_limits = state.get("risk_limits", {})
@@ -191,7 +203,7 @@ async def validate_node(state: IdeaLoopState) -> dict[str, Any]:
             "rejected_ideas": [],
             "agent_messages": state.get("agent_messages", []) + [
                 {
-                    "agent": "IdeaValidator",
+                    "agent": "ParallelValidators",
                     "node": "validate",
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "summary": "No raw ideas to validate",
@@ -199,109 +211,115 @@ async def validate_node(state: IdeaLoopState) -> dict[str, Any]:
             ],
         }
 
-    # -- Prototype validation logic ----------------------------------------
-    # A production system would instantiate an IdeaValidatorAgent here and
-    # call agent.execute() with the LLM.  For now we apply rule-based
-    # filtering plus an LLM sanity-check pass.
-
-    validated: list[dict] = []
-    rejected: list[dict] = []
+    # -- Pre-filter: rule-based gates before expensive LLM validation ------
+    candidates: list[dict] = []
+    pre_rejected: list[dict] = []
 
     min_confidence = risk_limits.get("min_idea_confidence", 0.3)
     max_position_count = risk_limits.get("max_positions", 50)
     current_position_count = len(portfolio_state.get("positions", []))
-
-    # Check if we have room for new positions
     position_room = max_position_count - current_position_count
 
     for idea in raw_ideas:
         reject_reasons: list[str] = []
 
-        # Confidence gate
         confidence = idea.get("confidence", 0.0)
         if confidence < min_confidence:
             reject_reasons.append(
                 f"Confidence {confidence:.2f} below threshold {min_confidence:.2f}"
             )
 
-        # Check for blacklisted tickers
         blacklist = set(risk_limits.get("ticker_blacklist", []))
         idea_tickers = set(idea.get("tickers", []))
         blocked = idea_tickers & blacklist
         if blocked:
             reject_reasons.append(f"Tickers {blocked} are blacklisted")
 
-        # Check for restricted asset classes
         restricted_classes = set(risk_limits.get("restricted_asset_classes", []))
         if idea.get("asset_class") in restricted_classes:
             reject_reasons.append(
                 f"Asset class {idea.get('asset_class')} is restricted"
             )
 
-        # Position capacity check
         if position_room <= 0 and not reject_reasons:
             reject_reasons.append("Portfolio at maximum position count")
 
         if reject_reasons:
             idea["status"] = "rejected"
             idea["reject_reasons"] = reject_reasons
-            rejected.append(idea)
+            pre_rejected.append(idea)
         else:
-            idea["status"] = "validated"
-            idea["validated_at"] = datetime.now(timezone.utc).isoformat()
-            validated.append(idea)
-            position_room -= 1  # optimistically reserve a slot
+            candidates.append(idea)
+            position_room -= 1
 
-    # Optionally run an LLM sanity-check on validated ideas
-    if validated:
+    # -- Deep validation: run parallel validators on surviving candidates ---
+    validated: list[dict] = []
+    rejected: list[dict] = list(pre_rejected)
+
+    if candidates:
+        llm = llm_router.get_provider()
+        context = AgentContext(
+            portfolio_state=portfolio_state,
+            market_context=state.get("market_data", {}),
+            knowledge_context=state.get("knowledge_context", []),
+        )
+
+        # Build thresholds from risk_limits (human-adjustable)
+        thresholds = ValidationThresholds(
+            pass_score=risk_limits.get("validation_pass_score", 0.60),
+            fail_score=risk_limits.get("validation_fail_score", 0.35),
+            min_reasoning_score=risk_limits.get("validation_min_reasoning", 0.45),
+        )
+
         try:
-            llm = llm_router.get_provider()
-            from src.agents.llm.base import LLMMessage
-
-            sanity_prompt = (
-                "You are a senior portfolio manager reviewing the following "
-                "investment ideas that passed initial screening.  For each idea, "
-                "reply with a JSON array of objects containing the idea 'id' and "
-                "a boolean 'pass' (true if the idea is reasonable, false if it "
-                "has obvious flaws).  Be concise.\n\n"
-                f"IDEAS:\n{_truncate_json(validated, max_chars=6000)}\n\n"
-                f"PORTFOLIO CONTEXT:\n{_truncate_json(portfolio_state, max_chars=2000)}"
-            )
-            response = await llm.chat(
-                messages=[LLMMessage(role="user", content=sanity_prompt)],
-                temperature=0.2,
-                max_tokens=2048,
+            results = await validate_ideas_batch(
+                candidates, context, llm, thresholds, max_concurrent=3
             )
 
-            import json
-            try:
-                sanity_results = json.loads(response.content)
-                if isinstance(sanity_results, list):
-                    failed_ids = {
-                        r["id"]
-                        for r in sanity_results
-                        if not r.get("pass", True) and "id" in r
-                    }
-                    if failed_ids:
-                        newly_rejected = [
-                            i for i in validated if i.get("id") in failed_ids
-                        ]
-                        for r in newly_rejected:
-                            r["status"] = "rejected"
-                            r["reject_reasons"] = ["Failed LLM sanity check"]
-                        rejected.extend(newly_rejected)
-                        validated = [
-                            i for i in validated if i.get("id") not in failed_ids
-                        ]
-            except (json.JSONDecodeError, TypeError, KeyError):
-                logger.debug("LLM sanity check returned unparseable response")
+            for idea, result in results:
+                idea["validation_result"] = {
+                    "verdict": result.verdict,
+                    "weighted_score": result.weighted_score,
+                    "scores": {
+                        k: {"score": v.score, "analysis": v.analysis, "flags": v.flags}
+                        for k, v in result.scores.items()
+                    },
+                    "reasoning": result.reasoning,
+                    "flags": result.flags,
+                    "thresholds": result.thresholds_used,
+                }
+
+                if result.verdict == "PASS":
+                    idea["status"] = "validated"
+                    idea["validated_at"] = datetime.now(timezone.utc).isoformat()
+                    idea["confidence"] = max(
+                        idea.get("confidence", 0.0), result.weighted_score
+                    )
+                    validated.append(idea)
+                elif result.verdict == "FAIL":
+                    idea["status"] = "rejected"
+                    idea["reject_reasons"] = result.flags[:5] or ["Failed validation"]
+                    rejected.append(idea)
+                else:
+                    # NEEDS_MORE_DATA — still pass through with lower confidence
+                    idea["status"] = "validated"
+                    idea["validated_at"] = datetime.now(timezone.utc).isoformat()
+                    idea["needs_more_data"] = True
+                    idea["confidence"] = min(idea.get("confidence", 0.5), 0.5)
+                    validated.append(idea)
+
         except Exception:
-            logger.debug("LLM sanity check skipped due to error", exc_info=True)
+            logger.exception("Parallel validation failed, applying fallback")
+            for idea in candidates:
+                idea["status"] = "validated"
+                idea["validated_at"] = datetime.now(timezone.utc).isoformat()
+                validated.append(idea)
 
     logger.info(
-        "Idea Loop [validate] -- validated=%d rejected=%d",
+        "Idea Loop [validate] -- validated=%d rejected=%d (pre-filtered=%d)",
         len(validated),
         len(rejected),
+        len(pre_rejected),
     )
 
     return {
@@ -309,12 +327,13 @@ async def validate_node(state: IdeaLoopState) -> dict[str, Any]:
         "rejected_ideas": state.get("rejected_ideas", []) + rejected,
         "agent_messages": state.get("agent_messages", []) + [
             {
-                "agent": "IdeaValidator",
+                "agent": "ParallelValidators",
                 "node": "validate",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "summary": (
                     f"Validated {len(validated)} ideas, "
-                    f"rejected {len(rejected)} ideas"
+                    f"rejected {len(rejected)} ideas "
+                    f"(4 validators per idea running in parallel)"
                 ),
             }
         ],

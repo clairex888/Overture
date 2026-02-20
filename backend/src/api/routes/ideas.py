@@ -78,7 +78,7 @@ class IdeaGenerateRequest(BaseModel):
         description="Limit to specific agent domains: macro, industry, crypto, quant, commodities, social",
     )
     timeframe: str | None = None
-    count: int = Field(3, ge=1, le=20, description="Number of ideas to generate")
+    count: int = Field(20, ge=1, le=50, description="Max ideas to keep (agents typically produce 12-30)")
 
 
 class AutoGenerateRequest(BaseModel):
@@ -355,14 +355,22 @@ async def generate_ideas(
 ):
     """Generate ideas using parallel AI agents.
 
-    Runs 4 specialized generators concurrently:
-    - Macro News Agent (Fed, rates, geopolitics)
-    - Industry News Agent (earnings, M&A, sector rotation)
-    - Crypto Agent (BTC cycles, DeFi, on-chain)
-    - Quant Systematic Agent (factor, momentum, mean reversion)
+    Workflow (mirrors an investment firm's analyst briefing):
+    1. Data Pipeline collects live data (news RSS, market prices, social signals)
+    2. Six specialized agents analyze the data concurrently:
+       - Macro News Agent (Fed, rates, geopolitics)
+       - Industry News Agent (earnings, M&A, sector rotation)
+       - Crypto Agent (BTC cycles, DeFi, on-chain)
+       - Quant Systematic Agent (factor, momentum, mean reversion)
+       - Commodities Agent (oil, metals, agriculture)
+       - Social Media Agent (Reddit, X, Substack sentiment)
+    3. Ideas are deduplicated, persisted, and returned.
 
-    Each agent produces 2-5 ideas. Results are deduplicated and persisted.
+    Each agent produces 2-5 ideas based on the live data it receives.
     """
+    import logging
+    _logger = logging.getLogger(__name__)
+
     from src.agents.engine import agent_engine
 
     if payload is None:
@@ -375,11 +383,11 @@ async def generate_ideas(
     if payload.domains:
         input_data["domains"] = payload.domains
 
-    # Run real parallel generators
+    # Run the full pipeline: data collection → parallel agent generation
     try:
         raw_ideas = await agent_engine.generate_ideas_once(input_data)
     except Exception:
-        # Fallback to basic generation if agents fail
+        _logger.exception("Idea generation failed")
         raw_ideas = []
 
     # Limit to requested count
@@ -423,24 +431,11 @@ async def generate_ideas(
         await session.flush()
         generated.append(_idea_to_response(idea))
 
-    # If agents produced nothing, create a placeholder so UI isn't empty
     if not generated:
-        idea = Idea(
-            id=str(uuid4()),
-            title="Idea generation in progress",
-            thesis="The AI agents are analyzing market conditions. Ideas will appear shortly.",
-            description="The AI agents are analyzing market conditions.",
-            source=IdeaSource.AGENT,
-            asset_class="equities",
-            tickers=[],
-            status=IdeaStatus.GENERATED,
-            confidence_score=0.0,
-            timeframe=Timeframe.MEDIUM_TERM,
-            metadata_={"tags": ["pending"]},
+        _logger.warning(
+            "Idea generation produced 0 ideas. Check LLM provider config "
+            "(OPENAI_API_KEY or ANTHROPIC_API_KEY) and data pipeline health."
         )
-        session.add(idea)
-        await session.flush()
-        generated.append(_idea_to_response(idea))
 
     return generated
 

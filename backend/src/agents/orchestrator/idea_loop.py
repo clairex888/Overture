@@ -118,37 +118,66 @@ def _default_idea_loop_state() -> IdeaLoopState:
 async def generate_node(state: IdeaLoopState) -> dict[str, Any]:
     """Node: generate investment ideas using parallel specialized agents.
 
-    Runs 4 specialized generators concurrently:
+    Runs 6 specialized generators concurrently:
       - MacroNewsAgent: macroeconomic and global macro ideas
       - IndustryNewsAgent: sector/company-specific equity ideas
       - CryptoAgent: digital asset and blockchain ideas
       - QuantSystematicAgent: factor-based and systematic strategies
+      - CommoditiesAgent: commodity, energy, and natural resource ideas
+      - SocialMediaAgent: social media sentiment and retail flow signals
 
-    Each agent receives the same input data but focuses on its domain,
-    producing ideas that are merged and deduplicated.
+    First collects live data via the DataPipeline (news, market data, social
+    signals, screens), then each agent receives the full data snapshot and
+    focuses on its domain. Ideas are merged and deduplicated.
     """
     logger.info(
-        "Idea Loop [generate] -- iteration %s, sources: news=%d market=%s social=%d screens=%d",
+        "Idea Loop [generate] -- iteration %s",
         state.get("iteration", 0),
-        len(state.get("news_items", [])),
-        bool(state.get("market_data")),
-        len(state.get("social_signals", [])),
-        len(state.get("screen_results", [])),
+    )
+
+    # ── Collect live data via the centralized DataPipeline ──
+    news_items = state.get("news_items", [])
+    market_data = state.get("market_data", {})
+    social_signals = state.get("social_signals", [])
+    screen_results = state.get("screen_results", [])
+
+    # If state has no data yet, collect from the pipeline
+    if not news_items and not social_signals and not market_data:
+        try:
+            from src.services.data_pipeline import data_pipeline
+
+            if data_pipeline is not None:
+                logger.info("Idea Loop [generate] -- collecting live data via pipeline")
+                snapshot = await data_pipeline.collect()
+                agent_input = snapshot.to_agent_input()
+                news_items = agent_input.get("news_items", [])
+                market_data = agent_input.get("market_data", {})
+                social_signals = agent_input.get("social_signals", [])
+                screen_results = agent_input.get("screen_results", [])
+        except Exception:
+            logger.warning("Data pipeline collection failed in generate_node", exc_info=True)
+
+    logger.info(
+        "Idea Loop [generate] -- sources: news=%d market=%s social=%d screens=%d",
+        len(news_items),
+        bool(market_data),
+        len(social_signals),
+        len(screen_results),
     )
 
     llm = llm_router.get_provider()
 
     context = AgentContext(
         portfolio_state=state.get("portfolio_state", {}),
-        market_context=state.get("market_data", {}),
+        market_context=market_data,
         knowledge_context=state.get("knowledge_context", []),
     )
 
     input_data = {
-        "news_items": state.get("news_items", []),
-        "market_data": state.get("market_data", {}),
-        "social_signals": state.get("social_signals", []),
-        "screen_results": state.get("screen_results", []),
+        "news_items": news_items,
+        "market_data": market_data,
+        "social_signals": social_signals,
+        "screen_results": screen_results,
     }
 
     try:
@@ -165,6 +194,10 @@ async def generate_node(state: IdeaLoopState) -> dict[str, Any]:
 
     return {
         "raw_ideas": raw_ideas,
+        "news_items": news_items,
+        "market_data": market_data,
+        "social_signals": social_signals,
+        "screen_results": screen_results,
         "agent_messages": state.get("agent_messages", []) + [
             {
                 "agent": "ParallelGenerators",

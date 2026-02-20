@@ -228,18 +228,60 @@ class AgentEngine:
 
         This is called by the /api/ideas/generate endpoint for on-demand
         idea generation without running the full loop.
+
+        The workflow mirrors an investment firm's analyst briefing:
+        1. Research desk collects data (DataPipeline)
+        2. Analysts receive the briefing packet (DataSnapshot → agents)
+        3. Each analyst generates ideas from their domain expertise
+        4. Ideas are stamped and returned for validation
         """
         llm = llm_router.get_provider()
 
+        # ── Step 1: Collect live market data via the centralized pipeline ──
+        # This is the "research desk" — gathers news, market data, social
+        # signals, and screen results into a single consistent snapshot.
+        enriched_data: dict = dict(input_data or {})
+        try:
+            from src.services.data_pipeline import data_pipeline
+
+            if data_pipeline is not None:
+                logger.info("Data pipeline: collecting live data for idea generation")
+                snapshot = await data_pipeline.collect()
+                agent_input = snapshot.to_agent_input()
+
+                # Merge pipeline data with any data already in input_data
+                # (pipeline data fills in what's missing, doesn't overwrite)
+                if agent_input.get("news_items") and not enriched_data.get("news_items"):
+                    enriched_data["news_items"] = agent_input["news_items"]
+                if agent_input.get("market_data") and not enriched_data.get("market_data"):
+                    enriched_data["market_data"] = agent_input["market_data"]
+                if agent_input.get("social_signals") and not enriched_data.get("social_signals"):
+                    enriched_data["social_signals"] = agent_input["social_signals"]
+                if agent_input.get("screen_results") and not enriched_data.get("screen_results"):
+                    enriched_data["screen_results"] = agent_input["screen_results"]
+
+                logger.info(
+                    "Data pipeline collected: news=%d, market_tickers=%d, social=%d, screens=%d",
+                    len(enriched_data.get("news_items", [])),
+                    len(enriched_data.get("market_data", {}).get("prices", {})),
+                    len(enriched_data.get("social_signals", [])),
+                    len(enriched_data.get("screen_results", [])),
+                )
+            else:
+                logger.warning("Data pipeline not available — agents will use general knowledge")
+        except Exception:
+            logger.warning("Data pipeline collection failed — agents will use general knowledge", exc_info=True)
+
+        # ── Step 2: Build analyst context ──
         knowledge_context = await self._get_knowledge_context("idea_generator")
 
         context = AgentContext(
             portfolio_state=self._idea_state.get("portfolio_state", {}),
-            market_context=input_data.get("market_data", {}) if input_data else {},
+            market_context=enriched_data.get("market_data", {}),
             knowledge_context=knowledge_context,
         )
 
-        # Determine which generators to run (domain filter)
+        # ── Step 3: Determine which analysts (generators) to brief ──
         domain_to_cls = {
             "macro": MacroNewsAgent,
             "industry": IndustryNewsAgent,
@@ -249,18 +291,18 @@ class AgentEngine:
             "social": SocialMediaAgent,
         }
         selected_generators = None
-        domains = (input_data or {}).get("domains")
+        domains = enriched_data.get("domains")
         if domains:
             selected_generators = [
                 domain_to_cls[d] for d in domains if d in domain_to_cls
             ] or None
 
-        # Run parallel generators
+        # ── Step 4: Run parallel analysts ──
         raw_ideas = await run_parallel_generators(
-            input_data or {}, context, llm, generators=selected_generators
+            enriched_data, context, llm, generators=selected_generators
         )
 
-        # Stamp ideas
+        # ── Step 5: Stamp ideas with IDs and timestamps ──
         for idea in raw_ideas:
             idea.setdefault("id", str(uuid4()))
             idea.setdefault("created_at", datetime.now(timezone.utc).isoformat())

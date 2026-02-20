@@ -115,6 +115,13 @@ class BaseIdeaGenerator(BaseAgent):
                 except json.JSONDecodeError:
                     pass
 
+        # If we get here, parsing failed completely — log for debugging
+        logger.warning(
+            "%s: Failed to parse LLM response as JSON ideas. "
+            "Response preview: %.300s",
+            self.name,
+            content,
+        )
         return []
 
     def _build_prompt(self, input_data: dict, context: AgentContext) -> str:

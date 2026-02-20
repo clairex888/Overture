@@ -32,6 +32,8 @@ export interface Idea {
   conviction: number;
   status: string;
   source: string;
+  source_agent: string | null;
+  source_urls: string[];
   tags: string[];
   notes: string | null;
   validation_result: Record<string, any> | null;

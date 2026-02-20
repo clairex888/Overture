@@ -43,8 +43,12 @@ import re
 def _extract_tickers(idea: dict) -> list[str]:
     """Extract ticker symbols from an idea dict.
 
-    Looks in 'tickers' (list or comma-sep string), 'ticker' (single),
-    and falls back to scanning the thesis/title for $TICKER patterns.
+    Handles multiple formats:
+    - List of dicts: [{"symbol": "SPY", "direction": "long"}]
+    - List of strings: ["SPY", "QQQ"]
+    - Comma-separated string: "SPY,QQQ"
+    - Single ticker: "SPY"
+    - Falls back to scanning thesis/title for $TICKER patterns.
     """
     tickers: list[str] = []
 
@@ -54,7 +58,12 @@ def _extract_tickers(idea: dict) -> list[str]:
         tickers = [t.strip().upper() for t in raw.split(",") if t.strip()]
     elif isinstance(raw, list):
         for t in raw:
-            if isinstance(t, str) and t.strip():
+            if isinstance(t, dict):
+                # Handle {"symbol": "SPY", "direction": "long", "weight": 1.0}
+                sym = t.get("symbol", "").strip().upper()
+                if sym:
+                    tickers.append(sym)
+            elif isinstance(t, str) and t.strip():
                 tickers.append(t.strip().upper())
 
     # Scan thesis / title for $TICKER patterns

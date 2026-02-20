@@ -343,7 +343,12 @@ class AgentEngine:
                 "verdict": result.verdict,
                 "weighted_score": result.weighted_score,
                 "scores": {
-                    k: {"score": v.score, "analysis": v.analysis, "flags": v.flags}
+                    k: {
+                        "score": v.score,
+                        "analysis": v.analysis,
+                        "flags": v.flags,
+                        "details": v.details,
+                    }
                     for k, v in result.scores.items()
                 },
                 "reasoning": result.reasoning,

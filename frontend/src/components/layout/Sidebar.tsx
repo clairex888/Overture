@@ -20,7 +20,14 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/components/providers/AuthProvider';
 
-const baseNavItems = [
+interface NavItem {
+  href: string;
+  label: string;
+  icon: React.ElementType;
+  children?: { href: string; label: string }[];
+}
+
+const baseNavItems: NavItem[] = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
   {
     href: '/ideas',
@@ -41,7 +48,7 @@ const baseNavItems = [
   { href: '/rl', label: 'RL Training', icon: Brain },
 ];
 
-const adminNavItem = { href: '/admin', label: 'Admin', icon: Shield };
+const adminNavItem: NavItem = { href: '/admin', label: 'Admin', icon: Shield };
 
 export default function Sidebar() {
   const pathname = usePathname();

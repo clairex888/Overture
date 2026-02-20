@@ -179,26 +179,45 @@ class MarketDataCollector(DataCollector):
 
 
 class SocialCollector(DataCollector):
-    """Collects social media signals from Reddit and other platforms."""
+    """Collects social media signals from Reddit, X/Twitter, and Substack.
+
+    Uses the real data source connectors:
+      - RedditSource (public JSON API — no auth needed)
+      - SocialAggregatorSource (Substack RSS + X API v2)
+    """
 
     name = "social"
 
-    def __init__(self, reddit_client_id: str = "", reddit_secret: str = ""):
-        self.reddit_client_id = reddit_client_id
-        self.reddit_secret = reddit_secret
-
     async def collect(self) -> dict[str, Any]:
-        """Fetch social signals. Falls back to empty if no credentials."""
-        if not self.reddit_client_id:
-            return {"social_signals": []}
+        """Fetch social signals from all available platforms."""
+        from dataclasses import asdict
+        from src.data.sources.reddit import RedditSource
+        from src.data.sources.social import SocialAggregatorSource
 
+        all_signals: list[dict] = []
+
+        # 1. Reddit (always works — no auth needed)
         try:
-            # Placeholder for real Reddit/social API integration
-            # In production: use PRAW or Reddit API to scrape r/wallstreetbets etc.
-            return {"social_signals": []}
+            reddit = RedditSource()
+            reddit_items = await reddit.fetch(limit=20)
+            for item in reddit_items:
+                d = asdict(item)
+                d["platform"] = "reddit"
+                all_signals.append(d)
         except Exception:
-            logger.warning("Social data collection failed", exc_info=True)
-            return {"social_signals": []}
+            logger.warning("Reddit collection failed", exc_info=True)
+
+        # 2. Substack + X via the social aggregator
+        try:
+            social = SocialAggregatorSource(enabled_platforms=["substack", "twitter"])
+            social_items = await social.fetch(limit=25)
+            for item in social_items:
+                d = asdict(item)
+                all_signals.append(d)
+        except Exception:
+            logger.warning("Social aggregator collection failed", exc_info=True)
+
+        return {"social_signals": all_signals}
 
 
 class ScreenCollector(DataCollector):
@@ -245,10 +264,7 @@ class DataPipeline:
         self.collectors: list[DataCollector] = [
             NewsCollector(api_key=settings.news_api_key),
             MarketDataCollector(),
-            SocialCollector(
-                reddit_client_id=settings.reddit_client_id,
-                reddit_secret=settings.reddit_client_secret,
-            ),
+            SocialCollector(),
             ScreenCollector(),
         ]
 

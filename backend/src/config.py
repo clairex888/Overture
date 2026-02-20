@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     reddit_client_secret: str = ""
     news_api_key: str = ""
 
+    # X / Twitter API v2 (Bearer Token for search/recent)
+    x_bearer_token: str = ""
+
     # RL Training
     rl_replay_buffer_size: int = 10000
     rl_batch_size: int = 64

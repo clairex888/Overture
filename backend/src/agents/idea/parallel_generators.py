@@ -603,7 +603,20 @@ class SocialMediaAgent(BaseIdeaGenerator):
 
         social = input_data.get("social_signals", [])
         if social:
-            parts.append(f"SOCIAL SIGNALS ({len(social)} items):\n{_truncate_json(social)}")
+            # Separate signals by platform for clearer analysis
+            reddit_signals = [s for s in social if s.get("platform") == "reddit" or s.get("source") == "reddit"]
+            substack_signals = [s for s in social if s.get("platform") == "substack" or s.get("source") == "substack"]
+            twitter_signals = [s for s in social if s.get("platform") == "twitter" or s.get("source") == "twitter"]
+            other_signals = [s for s in social if s not in reddit_signals + substack_signals + twitter_signals]
+
+            if reddit_signals:
+                parts.append(f"REDDIT SIGNALS ({len(reddit_signals)} posts):\n{_truncate_json(reddit_signals[:15])}")
+            if substack_signals:
+                parts.append(f"SUBSTACK NEWSLETTERS ({len(substack_signals)} articles):\n{_truncate_json(substack_signals[:10])}")
+            if twitter_signals:
+                parts.append(f"X/TWITTER SIGNALS ({len(twitter_signals)} tweets):\n{_truncate_json(twitter_signals[:15])}")
+            if other_signals:
+                parts.append(f"OTHER SOCIAL ({len(other_signals)} items):\n{_truncate_json(other_signals[:10])}")
 
         news = input_data.get("news_items", [])
         if news:
@@ -612,7 +625,7 @@ class SocialMediaAgent(BaseIdeaGenerator):
                 n for n in news
                 if any(kw in (n.get("headline", "") + n.get("summary", "")).lower()
                        for kw in ("sentiment", "retail", "wsb", "meme", "short squeeze",
-                                  "social media", "reddit", "twitter"))
+                                  "social media", "reddit", "twitter", "substack"))
             ]
             if sentiment_news:
                 parts.append(f"SENTIMENT NEWS:\n{_truncate_json(sentiment_news[:10])}")

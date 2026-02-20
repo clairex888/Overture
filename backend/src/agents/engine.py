@@ -24,7 +24,16 @@ from uuid import uuid4
 
 from src.agents.base import AgentContext
 from src.agents.llm.router import llm_router
-from src.agents.idea.parallel_generators import run_parallel_generators
+from src.agents.idea.parallel_generators import (
+    run_parallel_generators,
+    ALL_GENERATORS,
+    MacroNewsAgent,
+    IndustryNewsAgent,
+    CryptoAgent,
+    QuantSystematicAgent,
+    CommoditiesAgent,
+    SocialMediaAgent,
+)
 from src.agents.idea.parallel_validators import (
     validate_ideas_batch,
     ValidationThresholds,
@@ -230,9 +239,25 @@ class AgentEngine:
             knowledge_context=knowledge_context,
         )
 
+        # Determine which generators to run (domain filter)
+        domain_to_cls = {
+            "macro": MacroNewsAgent,
+            "industry": IndustryNewsAgent,
+            "crypto": CryptoAgent,
+            "quant": QuantSystematicAgent,
+            "commodities": CommoditiesAgent,
+            "social": SocialMediaAgent,
+        }
+        selected_generators = None
+        domains = (input_data or {}).get("domains")
+        if domains:
+            selected_generators = [
+                domain_to_cls[d] for d in domains if d in domain_to_cls
+            ] or None
+
         # Run parallel generators
         raw_ideas = await run_parallel_generators(
-            input_data or {}, context, llm
+            input_data or {}, context, llm, generators=selected_generators
         )
 
         # Stamp ideas

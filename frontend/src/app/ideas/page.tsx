@@ -7,7 +7,8 @@ import {
   ChevronDown,
   ChevronRight,
   Zap,
-  Filter,
+  Play,
+  Pause,
   Loader2,
   AlertCircle,
 } from 'lucide-react';
@@ -47,9 +48,18 @@ const statusColors: Record<string, string> = {
 };
 
 const sourceIcons: Record<string, string> = {
-  human: '👤',
-  agent: '🤖',
+  human: '\u{1F464}',
+  agent: '\u{1F916}',
 };
+
+const AGENT_DOMAINS = [
+  { key: 'macro', label: 'Macro', description: 'Fed, rates, inflation, geopolitics' },
+  { key: 'industry', label: 'Industry', description: 'Earnings, M&A, sector rotation' },
+  { key: 'crypto', label: 'Crypto', description: 'BTC, ETH, DeFi, on-chain' },
+  { key: 'quant', label: 'Quant', description: 'Factor, momentum, mean reversion' },
+  { key: 'commodities', label: 'Commodities', description: 'Oil, metals, agriculture' },
+  { key: 'social', label: 'Social', description: 'Reddit, X sentiment, retail flow' },
+] as const;
 
 export default function IdeasPage() {
   const [ideas, setIdeas] = useState<Idea[]>([]);
@@ -60,6 +70,14 @@ export default function IdeasPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [generating, setGenerating] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+
+  // Agent domain selection
+  const [selectedDomains, setSelectedDomains] = useState<Set<string>>(new Set());
+
+  // Auto-generation state
+  const [autoRunning, setAutoRunning] = useState(false);
+  const [autoIterations, setAutoIterations] = useState(0);
+  const [autoLoading, setAutoLoading] = useState(false);
 
   const fetchIdeas = useCallback(async () => {
     try {
@@ -73,21 +91,94 @@ export default function IdeasPage() {
     }
   }, []);
 
+  const fetchAutoStatus = useCallback(async () => {
+    try {
+      const status = await ideasAPI.autoGenerateStatus();
+      setAutoRunning(status.running);
+      setAutoIterations(status.iterations);
+    } catch {
+      // Silently ignore — status endpoint may not be available yet
+    }
+  }, []);
+
   useEffect(() => {
     fetchIdeas();
-  }, [fetchIdeas]);
+    fetchAutoStatus();
+  }, [fetchIdeas, fetchAutoStatus]);
+
+  // Poll for new ideas while auto-generation is running
+  useEffect(() => {
+    if (!autoRunning) return;
+    const interval = setInterval(() => {
+      fetchIdeas();
+      fetchAutoStatus();
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [autoRunning, fetchIdeas, fetchAutoStatus]);
+
+  const getDomainsPayload = (): string[] | undefined => {
+    if (selectedDomains.size === 0 || selectedDomains.size === AGENT_DOMAINS.length) {
+      return undefined; // all agents
+    }
+    return Array.from(selectedDomains);
+  };
 
   const handleGenerate = async () => {
     try {
       setGenerating(true);
       setError(null);
-      await ideasAPI.generate();
+      const domains = getDomainsPayload();
+      await ideasAPI.generate(domains ? { domains } : undefined);
       await fetchIdeas();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to generate ideas');
     } finally {
       setGenerating(false);
     }
+  };
+
+  const handleAutoStart = async () => {
+    try {
+      setAutoLoading(true);
+      setError(null);
+      const domains = getDomainsPayload();
+      const result = await ideasAPI.autoGenerateStart({
+        interval_seconds: 60,
+        ...(domains ? { domains } : {}),
+      });
+      setAutoRunning(result.running);
+      setAutoIterations(result.iterations);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start auto-generation');
+    } finally {
+      setAutoLoading(false);
+    }
+  };
+
+  const handleAutoStop = async () => {
+    try {
+      setAutoLoading(true);
+      setError(null);
+      const result = await ideasAPI.autoGenerateStop();
+      setAutoRunning(result.running);
+      setAutoIterations(result.iterations);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to stop auto-generation');
+    } finally {
+      setAutoLoading(false);
+    }
+  };
+
+  const toggleDomain = (domain: string) => {
+    setSelectedDomains((prev) => {
+      const next = new Set(prev);
+      if (next.has(domain)) {
+        next.delete(domain);
+      } else {
+        next.add(domain);
+      }
+      return next;
+    });
   };
 
   const handleValidate = async (id: string) => {
@@ -156,10 +247,7 @@ export default function IdeasPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <button className="btn-secondary flex items-center gap-2">
-            <Filter className="w-4 h-4" />
-            Advanced Filters
-          </button>
+          {/* Generate Once */}
           <button
             className="btn-primary flex items-center gap-2"
             onClick={handleGenerate}
@@ -170,8 +258,40 @@ export default function IdeasPage() {
             ) : (
               <Zap className="w-4 h-4" />
             )}
-            {generating ? 'Generating...' : 'Generate Ideas'}
+            {generating ? 'Generating...' : 'Generate Once'}
           </button>
+
+          {/* Auto-Generate Start / Pause */}
+          {autoRunning ? (
+            <button
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-warning/10 text-warning border border-warning/20 hover:bg-warning/20 transition-colors"
+              onClick={handleAutoStop}
+              disabled={autoLoading}
+            >
+              {autoLoading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Pause className="w-4 h-4" />
+              )}
+              Pause Auto
+              {autoIterations > 0 && (
+                <span className="ml-1 text-xs opacity-70">({autoIterations})</span>
+              )}
+            </button>
+          ) : (
+            <button
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-profit/10 text-profit border border-profit/20 hover:bg-profit/20 transition-colors"
+              onClick={handleAutoStart}
+              disabled={autoLoading}
+            >
+              {autoLoading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Play className="w-4 h-4" />
+              )}
+              Auto-Generate
+            </button>
+          )}
         </div>
       </div>
 
@@ -188,6 +308,42 @@ export default function IdeasPage() {
           </button>
         </div>
       )}
+
+      {/* Agent Domain Selector */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-text-primary">
+            Agent Focus
+          </h3>
+          <span className="text-xs text-text-muted">
+            {selectedDomains.size === 0
+              ? 'All agents active'
+              : `${selectedDomains.size} of ${AGENT_DOMAINS.length} selected`}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+          {AGENT_DOMAINS.map((agent) => {
+            return (
+              <button
+                key={agent.key}
+                onClick={() => toggleDomain(agent.key)}
+                className={`rounded-lg p-3 border text-left transition-all ${
+                  selectedDomains.has(agent.key)
+                    ? 'bg-accent/10 border-accent/30 text-accent'
+                    : selectedDomains.size === 0
+                    ? 'bg-dark-700 border-white/[0.08] text-text-secondary hover:border-white/[0.15]'
+                    : 'bg-dark-800 border-white/[0.05] text-text-muted hover:border-white/[0.1]'
+                }`}
+              >
+                <div className="text-xs font-semibold">{agent.label}</div>
+                <div className="text-[10px] mt-0.5 opacity-70">
+                  {agent.description}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
       {/* Pipeline Visualization */}
       <div className="card">
@@ -285,7 +441,7 @@ export default function IdeasPage() {
                   </td>
                   <td className="table-cell">
                     <span className="text-sm">
-                      {sourceIcons[idea.source] || '📄'} {idea.source}
+                      {sourceIcons[idea.source] || '\u{1F4C4}'} {idea.source}
                     </span>
                   </td>
                   <td className="table-cell">

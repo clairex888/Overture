@@ -73,8 +73,26 @@ class IdeaResponse(BaseModel):
 
 class IdeaGenerateRequest(BaseModel):
     asset_classes: list[str] | None = Field(None, description="Limit to specific asset classes")
+    domains: list[str] | None = Field(
+        None,
+        description="Limit to specific agent domains: macro, industry, crypto, quant, commodities, social",
+    )
     timeframe: str | None = None
     count: int = Field(3, ge=1, le=20, description="Number of ideas to generate")
+
+
+class AutoGenerateRequest(BaseModel):
+    interval_seconds: int = Field(60, ge=10, le=3600, description="Seconds between iterations")
+    domains: list[str] | None = Field(
+        None,
+        description="Limit to specific agent domains: macro, industry, crypto, quant, commodities, social",
+    )
+
+
+class AutoGenerateStatusResponse(BaseModel):
+    running: bool
+    iterations: int
+    active_domains: list[str] | None = None
 
 
 class IdeaStatsResponse(BaseModel):
@@ -227,6 +245,70 @@ async def list_ideas(
     return [_idea_to_response(i) for i in ideas]
 
 
+# ---------------------------------------------------------------------------
+# Auto-generation loop control  (must be before /{idea_id} routes)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/auto-generate/status", response_model=AutoGenerateStatusResponse)
+async def get_auto_generate_status():
+    """Check current auto-generation loop status."""
+    from src.agents.engine import agent_engine
+
+    status = agent_engine.get_status()
+    idea_loop = status.get("idea_loop", {})
+    return AutoGenerateStatusResponse(
+        running=idea_loop.get("running", False),
+        iterations=idea_loop.get("iterations", 0),
+    )
+
+
+@router.post("/auto-generate/start", response_model=AutoGenerateStatusResponse)
+async def start_auto_generate(payload: AutoGenerateRequest | None = None):
+    """Start continuous auto-generation of ideas.
+
+    Optionally limit to specific agent domains (macro, industry, crypto,
+    quant, commodities, social).
+    """
+    from src.agents.engine import agent_engine
+
+    if payload is None:
+        payload = AutoGenerateRequest()
+
+    initial_data: dict[str, Any] = {}
+    if payload.domains:
+        initial_data["domains"] = payload.domains
+
+    result = await agent_engine.start_idea_loop(
+        interval_seconds=payload.interval_seconds,
+        initial_data=initial_data,
+    )
+
+    already_running = result.get("status") == "already_running"
+    return AutoGenerateStatusResponse(
+        running=True,
+        iterations=result.get("iterations", 0) if already_running else 0,
+        active_domains=payload.domains,
+    )
+
+
+@router.post("/auto-generate/stop", response_model=AutoGenerateStatusResponse)
+async def stop_auto_generate():
+    """Stop the continuous auto-generation loop."""
+    from src.agents.engine import agent_engine
+
+    result = await agent_engine.stop_idea_loop()
+    return AutoGenerateStatusResponse(
+        running=False,
+        iterations=result.get("iterations", 0),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Single idea CRUD (parametric routes last)
+# ---------------------------------------------------------------------------
+
+
 @router.get("/{idea_id}", response_model=IdeaResponse)
 async def get_idea(idea_id: str, session: AsyncSession = Depends(get_session)):
     """Get a single idea by ID."""
@@ -290,6 +372,8 @@ async def generate_ideas(
     input_data: dict[str, Any] = {}
     if payload.asset_classes:
         input_data["asset_classes"] = payload.asset_classes
+    if payload.domains:
+        input_data["domains"] = payload.domains
 
     # Run real parallel generators
     try:

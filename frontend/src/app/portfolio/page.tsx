@@ -708,9 +708,12 @@ function PortfolioPageInner() {
   };
 
   const handleModalClose = () => {
-    // Only allow closing if user has at least one portfolio
     if (portfolios.length > 0) {
       setModalOpen(false);
+    } else {
+      // No portfolios — navigate back to dashboard
+      setModalOpen(false);
+      router.push('/');
     }
   };
 

@@ -603,9 +603,24 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Build CORS origins list from settings
+_cors_origins: list[str] = [
+    "http://localhost:3000",
+]
+if settings.frontend_url and settings.frontend_url not in _cors_origins:
+    _cors_origins.append(settings.frontend_url)
+# CORS_ORIGINS env var: comma-separated extra origins (e.g. production frontend URL)
+if settings.cors_origins:
+    for origin in settings.cors_origins.split(","):
+        origin = origin.strip()
+        if origin and origin not in _cors_origins:
+            _cors_origins.append(origin)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_url, "http://localhost:3000"],
+    allow_origins=_cors_origins,
+    # Also allow any Railway-deployed frontend (*.up.railway.app)
+    allow_origin_regex=r"https://.*\.up\.railway\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

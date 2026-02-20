@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     frontend_url: str = "http://localhost:3000"
+    cors_origins: str = ""
 
     # Database — Railway provides DATABASE_URL with postgresql:// scheme;
     # we normalise it to postgresql+asyncpg:// for SQLAlchemy's async driver.

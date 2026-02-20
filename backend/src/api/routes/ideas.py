@@ -63,6 +63,8 @@ class IdeaResponse(BaseModel):
     conviction: float
     status: str
     source: str
+    source_agent: str | None = None
+    source_urls: list[str] = Field(default_factory=list)
     tags: list[str]
     notes: str | None
     validation_result: dict[str, Any] | None
@@ -151,6 +153,10 @@ def _idea_to_response(idea: Idea) -> IdeaResponse:
     source_str = _SOURCE_TO_API.get(idea.source, idea.source.value if idea.source else "agent")
     tf = idea.timeframe.value if idea.timeframe else "medium_term"
 
+    # Extract specific agent name and source URLs from metadata
+    source_agent = meta.get("source_agent") or None
+    source_urls = meta.get("source_urls", [])
+
     return IdeaResponse(
         id=idea.id,
         title=idea.title,
@@ -161,6 +167,8 @@ def _idea_to_response(idea: Idea) -> IdeaResponse:
         conviction=idea.confidence_score or 0.0,
         status=idea.status.value if idea.status else "generated",
         source=source_str,
+        source_agent=source_agent,
+        source_urls=source_urls,
         tags=meta.get("tags", []),
         notes=meta.get("notes"),
         validation_result=idea.validation_results,
@@ -425,6 +433,7 @@ async def generate_ideas(
                 "invalidation_triggers": raw.get("invalidation_triggers", []),
                 "source_agent": raw.get("source_agent", ""),
                 "domain": raw.get("domain", ""),
+                "source_urls": raw.get("source_urls", []),
             },
         )
         session.add(idea)

@@ -61,10 +61,14 @@ class BaseIdeaGenerator(BaseAgent):
                 messages, temperature=self._temperature(), max_tokens=4096
             )
             ideas = self._parse_ideas(response.content)
-            # Tag ideas with source agent
+            # Tag ideas with source agent and collect source URLs
+            available_urls = self._collect_source_urls(input_data)
             for idea in ideas:
                 idea["source_agent"] = self.name
                 idea["domain"] = self.domain
+                # Preserve any source_urls the LLM included, or attach available ones
+                if not idea.get("source_urls"):
+                    idea["source_urls"] = available_urls
         except Exception:
             logger.exception("%s LLM call failed", self.name)
             ideas = []
@@ -75,6 +79,19 @@ class BaseIdeaGenerator(BaseAgent):
             output_data={"idea_count": len(ideas)},
         )
         return {"ideas": ideas}
+
+    def _collect_source_urls(self, input_data: dict) -> list[str]:
+        """Extract source URLs from the input data that was used to generate ideas."""
+        urls: list[str] = []
+        for item in input_data.get("news_items", []):
+            url = item.get("url", "")
+            if url and url not in urls:
+                urls.append(url)
+        for item in input_data.get("social_signals", []):
+            url = item.get("url", "")
+            if url and url not in urls:
+                urls.append(url)
+        return urls[:10]  # Keep top 10
 
     def _temperature(self) -> float:
         return 0.5
@@ -154,7 +171,7 @@ When generating ideas, think like a global macro hedge fund:
 
 Output a JSON array. Each idea must have: title, thesis, tickers (array),
 asset_class, timeframe, source, confidence (0-1), risks (array),
-invalidation_triggers (array)."""
+invalidation_triggers (array), source_urls (array of URLs that inspired this idea)."""
 
 
 class MacroNewsAgent(BaseIdeaGenerator):
@@ -234,7 +251,7 @@ When generating ideas, think like a fundamental long/short equity analyst:
 
 Output a JSON array. Each idea must have: title, thesis, tickers (array),
 asset_class, timeframe, source, confidence (0-1), risks (array),
-invalidation_triggers (array)."""
+invalidation_triggers (array), source_urls (array of URLs that inspired this idea)."""
 
 
 class IndustryNewsAgent(BaseIdeaGenerator):
@@ -324,7 +341,7 @@ When generating ideas, apply institutional-grade analysis:
 
 Output a JSON array. Each idea must have: title, thesis, tickers (array),
 asset_class (use "crypto"), timeframe, source, confidence (0-1), risks (array),
-invalidation_triggers (array)."""
+invalidation_triggers (array), source_urls (array of URLs that inspired this idea)."""
 
 
 class CryptoAgent(BaseIdeaGenerator):
@@ -411,7 +428,8 @@ For systematic strategies, include a "strategy_rules" field with:
 
 Output a JSON array. Each idea must have: title, thesis, tickers (array),
 asset_class, timeframe, source (use "quantitative_screen"), confidence (0-1),
-risks (array), invalidation_triggers (array). Optionally include strategy_rules."""
+risks (array), invalidation_triggers (array), source_urls (array of URLs).
+Optionally include strategy_rules."""
 
 
 class QuantSystematicAgent(BaseIdeaGenerator):
@@ -497,7 +515,7 @@ When generating ideas, think like a commodity trading advisor:
 
 Output a JSON array. Each idea must have: title, thesis, tickers (array),
 asset_class (use "commodity" or "energy"), timeframe, source, confidence (0-1),
-risks (array), invalidation_triggers (array)."""
+risks (array), invalidation_triggers (array), source_urls (array of URLs)."""
 
 
 class CommoditiesAgent(BaseIdeaGenerator):
@@ -585,7 +603,8 @@ When generating ideas, be a skeptical signal extractor:
 
 Output a JSON array. Each idea must have: title, thesis, tickers (array),
 asset_class, timeframe, source (include platform and key voices),
-confidence (0-1), risks (array), invalidation_triggers (array).
+confidence (0-1), risks (array), invalidation_triggers (array),
+source_urls (array of URLs to original posts/articles).
 Social-only ideas should start with lower confidence unless corroborated."""
 
 

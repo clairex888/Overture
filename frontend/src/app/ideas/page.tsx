@@ -11,6 +11,8 @@ import {
   Pause,
   Loader2,
   AlertCircle,
+  Trash2,
+  ExternalLink,
 } from 'lucide-react';
 import type { Idea } from '@/types';
 import { ideasAPI } from '@/lib/api';
@@ -50,6 +52,30 @@ const statusColors: Record<string, string> = {
 const sourceIcons: Record<string, string> = {
   human: '\u{1F464}',
   agent: '\u{1F916}',
+};
+
+const agentColors: Record<string, string> = {
+  'Macro News Agent': 'text-blue-400',
+  'Industry News Agent': 'text-emerald-400',
+  'Crypto Agent': 'text-purple-400',
+  'Quant Systematic Agent': 'text-cyan-400',
+  'Commodities Agent': 'text-amber-400',
+  'Social Media Agent': 'text-pink-400',
+};
+
+const agentShortNames: Record<string, string> = {
+  'Macro News Agent': 'Macro',
+  'Industry News Agent': 'Industry',
+  'Crypto Agent': 'Crypto',
+  'Quant Systematic Agent': 'Quant',
+  'Commodities Agent': 'Commodities',
+  'Social Media Agent': 'Social',
+};
+
+const verdictColors: Record<string, string> = {
+  PASS: 'text-profit bg-profit/10 border-profit/20',
+  FAIL: 'text-loss bg-loss/10 border-loss/20',
+  NEEDS_MORE_DATA: 'text-warning bg-warning/10 border-warning/20',
 };
 
 const AGENT_DOMAINS = [
@@ -202,6 +228,20 @@ export default function IdeasPage() {
       await fetchIdeas();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to execute idea');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      setActionLoading(id);
+      setError(null);
+      await ideasAPI.delete(id);
+      if (expandedId === id) setExpandedId(null);
+      await fetchIdeas();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete idea');
     } finally {
       setActionLoading(null);
     }
@@ -410,12 +450,13 @@ export default function IdeasPage() {
             <tr className="border-b border-white/[0.08]">
               <th className="table-header text-left px-4 py-3 w-8" />
               <th className="table-header text-left px-4 py-3">Title</th>
-              <th className="table-header text-left px-4 py-3">Source</th>
+              <th className="table-header text-left px-4 py-3">Agent</th>
               <th className="table-header text-left px-4 py-3">Tickers</th>
               <th className="table-header text-left px-4 py-3">Status</th>
               <th className="table-header text-right px-4 py-3">Conviction</th>
               <th className="table-header text-left px-4 py-3">Timeframe</th>
               <th className="table-header text-left px-4 py-3">Created</th>
+              <th className="table-header text-center px-4 py-3 w-12" />
             </tr>
           </thead>
           <tbody>
@@ -440,9 +481,15 @@ export default function IdeasPage() {
                     </span>
                   </td>
                   <td className="table-cell">
-                    <span className="text-sm">
-                      {sourceIcons[idea.source] || '\u{1F4C4}'} {idea.source}
-                    </span>
+                    {idea.source_agent ? (
+                      <span className={`text-xs font-medium ${agentColors[idea.source_agent] || 'text-text-secondary'}`}>
+                        {agentShortNames[idea.source_agent] || idea.source_agent}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-text-muted">
+                        {sourceIcons[idea.source] || ''} {idea.source}
+                      </span>
+                    )}
                   </td>
                   <td className="table-cell">
                     <div className="flex gap-1">
@@ -486,21 +533,76 @@ export default function IdeasPage() {
                       {new Date(idea.created_at).toLocaleDateString()}
                     </span>
                   </td>
+                  <td className="table-cell text-center">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(idea.id);
+                      }}
+                      disabled={actionLoading === idea.id}
+                      className="p-1 rounded hover:bg-loss/10 text-text-muted hover:text-loss transition-colors"
+                      title="Delete idea"
+                    >
+                      {actionLoading === idea.id ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Trash2 className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </td>
                 </tr>
                 {expandedId === idea.id && (
                   <tr key={`${idea.id}-detail`} className="border-b border-white/[0.05]">
-                    <td colSpan={8} className="px-4 py-4 bg-dark-800">
-                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                        {/* Thesis */}
-                        <div>
-                          <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2">
-                            Investment Thesis
-                          </h4>
-                          <p className="text-sm text-text-secondary leading-relaxed">
-                            {idea.thesis}
-                          </p>
+                    <td colSpan={9} className="px-4 py-4 bg-dark-800">
+                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                        {/* Thesis + Source Info */}
+                        <div className="lg:col-span-2 space-y-4">
+                          <div>
+                            <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2">
+                              Investment Thesis
+                            </h4>
+                            <p className="text-sm text-text-secondary leading-relaxed">
+                              {idea.thesis}
+                            </p>
+                          </div>
+
+                          {/* Source Agent Badge */}
+                          {idea.source_agent && (
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] text-text-muted uppercase">Generated by</span>
+                              <span className={`text-xs font-semibold ${agentColors[idea.source_agent] || 'text-text-secondary'}`}>
+                                {idea.source_agent}
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Source URLs */}
+                          {idea.source_urls && idea.source_urls.length > 0 && (
+                            <div>
+                              <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2">
+                                Source Inspirations
+                              </h4>
+                              <div className="space-y-1">
+                                {idea.source_urls.slice(0, 5).map((url, idx) => (
+                                  <a
+                                    key={idx}
+                                    href={url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="flex items-center gap-1.5 text-xs text-info hover:text-info-light transition-colors truncate"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <ExternalLink className="w-3 h-3 shrink-0" />
+                                    <span className="truncate">{url.replace(/^https?:\/\//, '').split('/').slice(0, 2).join('/')}</span>
+                                  </a>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Tags */}
                           {idea.tags && idea.tags.length > 0 && (
-                            <div className="flex flex-wrap gap-1 mt-3">
+                            <div className="flex flex-wrap gap-1">
                               {idea.tags.map((tag) => (
                                 <span
                                   key={tag}
@@ -511,16 +613,6 @@ export default function IdeasPage() {
                               ))}
                             </div>
                           )}
-                          {idea.notes && (
-                            <div className="mt-3">
-                              <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-1">
-                                Notes
-                              </h4>
-                              <p className="text-xs text-text-muted leading-relaxed">
-                                {idea.notes}
-                              </p>
-                            </div>
-                          )}
                         </div>
 
                         {/* Validation Results */}
@@ -529,23 +621,72 @@ export default function IdeasPage() {
                             Validation Results
                           </h4>
                           {idea.validation_result ? (
-                            <div className="grid grid-cols-2 gap-2">
-                              {Object.entries(idea.validation_result).map(
-                                ([key, value]) => (
-                                  <div
-                                    key={key}
-                                    className="p-2 rounded-lg bg-dark-700"
-                                  >
-                                    <span className="text-[10px] text-text-muted uppercase">
-                                      {key.replace(/_/g, ' ')}
+                            <div className="space-y-2">
+                              {/* Verdict Badge */}
+                              {idea.validation_result.verdict && (
+                                <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-bold ${verdictColors[idea.validation_result.verdict] || 'text-text-secondary bg-dark-700'}`}>
+                                  {idea.validation_result.verdict === 'PASS' ? 'PASS' :
+                                   idea.validation_result.verdict === 'FAIL' ? 'FAIL' : 'NEEDS MORE DATA'}
+                                  {typeof idea.validation_result.weighted_score === 'number' && (
+                                    <span className="font-mono">
+                                      {(idea.validation_result.weighted_score * 100).toFixed(0)}%
                                     </span>
-                                    <p className="text-sm font-semibold text-text-primary mt-0.5">
-                                      {typeof value === 'number'
-                                        ? (value * 100).toFixed(0) + '%'
-                                        : String(value)}
-                                    </p>
-                                  </div>
-                                )
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Individual Validator Scores */}
+                              {idea.validation_result.scores && typeof idea.validation_result.scores === 'object' && (
+                                <div className="space-y-1.5">
+                                  {Object.entries(idea.validation_result.scores as Record<string, any>).map(
+                                    ([lens, scoreData]) => {
+                                      const score = typeof scoreData === 'object' ? scoreData?.score : scoreData;
+                                      const analysis = typeof scoreData === 'object' ? scoreData?.analysis : '';
+                                      const scoreNum = typeof score === 'number' ? score : 0.5;
+                                      return (
+                                        <div key={lens} className="p-2 rounded-lg bg-dark-700">
+                                          <div className="flex items-center justify-between mb-1">
+                                            <span className="text-[10px] text-text-muted uppercase font-semibold">
+                                              {lens.replace(/_/g, ' ')}
+                                            </span>
+                                            <span className={`text-xs font-mono font-bold ${
+                                              scoreNum >= 0.7 ? 'text-profit' :
+                                              scoreNum >= 0.5 ? 'text-warning' : 'text-loss'
+                                            }`}>
+                                              {(scoreNum * 100).toFixed(0)}%
+                                            </span>
+                                          </div>
+                                          {/* Score bar */}
+                                          <div className="h-1 rounded-full bg-dark-500 overflow-hidden">
+                                            <div
+                                              className={`h-full rounded-full transition-all ${
+                                                scoreNum >= 0.7 ? 'bg-profit' :
+                                                scoreNum >= 0.5 ? 'bg-warning' : 'bg-loss'
+                                              }`}
+                                              style={{ width: `${scoreNum * 100}%` }}
+                                            />
+                                          </div>
+                                          {analysis && (
+                                            <p className="text-[10px] text-text-muted mt-1 line-clamp-2">
+                                              {analysis}
+                                            </p>
+                                          )}
+                                        </div>
+                                      );
+                                    }
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Flags */}
+                              {idea.validation_result.flags && idea.validation_result.flags.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  {(idea.validation_result.flags as string[]).slice(0, 5).map((flag, idx) => (
+                                    <span key={idx} className="px-1.5 py-0.5 rounded bg-loss/10 text-[10px] text-loss">
+                                      {flag}
+                                    </span>
+                                  ))}
+                                </div>
                               )}
                             </div>
                           ) : (

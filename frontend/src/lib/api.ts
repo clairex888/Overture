@@ -155,6 +155,23 @@ export const ideasAPI = {
   execute: (id: string) =>
     fetchAPI<Idea>(`/api/ideas/${id}/execute`, { method: 'POST' }),
   stats: () => fetchAPI<IdeaStats>('/api/ideas/stats'),
+  autoGenerateStart: (data?: { interval_seconds?: number; domains?: string[] }) =>
+    fetchAPI<{ running: boolean; iterations: number; active_domains: string[] | null }>(
+      '/api/ideas/auto-generate/start',
+      {
+        method: 'POST',
+        body: data ? JSON.stringify(data) : undefined,
+      },
+    ),
+  autoGenerateStop: () =>
+    fetchAPI<{ running: boolean; iterations: number }>(
+      '/api/ideas/auto-generate/stop',
+      { method: 'POST' },
+    ),
+  autoGenerateStatus: () =>
+    fetchAPI<{ running: boolean; iterations: number; active_domains: string[] | null }>(
+      '/api/ideas/auto-generate/status',
+    ),
 };
 
 // Portfolio API

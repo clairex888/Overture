@@ -148,7 +148,7 @@ export const ideasAPI = {
   generate: (data?: Record<string, any>) =>
     fetchAPI<Idea[]>('/api/ideas/generate', {
       method: 'POST',
-      body: data ? JSON.stringify(data) : undefined,
+      body: JSON.stringify(data || {}),
     }),
   validate: (id: string) =>
     fetchAPI<Idea>(`/api/ideas/${id}/validate`, { method: 'POST' }),

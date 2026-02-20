@@ -92,27 +92,46 @@ class DataCollector:
 
 
 class NewsCollector(DataCollector):
-    """Collects news from configured news APIs."""
+    """Collects news from RSS feeds and optional news APIs.
+
+    Uses the real RSSNewsSource connector which fetches from Reuters,
+    CNBC, Bloomberg, MarketWatch, Yahoo Finance, and other financial
+    news RSS feeds — no API key required.
+    """
 
     name = "news"
 
     def __init__(self, api_key: str = "", sources: list[str] | None = None):
         self.api_key = api_key
-        self.sources = sources or ["financial_times", "reuters", "bloomberg", "wsj"]
+        self.sources = sources or []
 
     async def collect(self) -> dict[str, Any]:
-        """Fetch news headlines. Falls back to empty if no API key."""
-        if not self.api_key:
-            logger.debug("News collector: no API key, returning empty")
-            return {"news_items": []}
+        """Fetch news from RSS feeds (always works) + optional news API."""
+        from dataclasses import asdict
+        all_news: list[dict] = []
 
+        # 1. RSS feeds — always available, no API key needed
         try:
-            # Placeholder for real news API integration
-            # In production: call NewsAPI, Alpha Vantage News, or Bloomberg API
-            return {"news_items": []}
+            from src.data.sources.news_rss import RSSNewsSource
+            rss = RSSNewsSource()
+            rss_items = await rss.fetch()
+            for item in rss_items:
+                d = asdict(item)
+                d["source_type"] = "news"
+                all_news.append(d)
+            logger.info("RSS news collected %d articles", len(rss_items))
         except Exception:
-            logger.warning("News collection failed", exc_info=True)
-            return {"news_items": []}
+            logger.warning("RSS news collection failed", exc_info=True)
+
+        # 2. Optional: paid news API (NewsAPI, Alpha Vantage, etc.)
+        if self.api_key:
+            try:
+                # Placeholder for premium news API integration
+                pass
+            except Exception:
+                logger.warning("Premium news API collection failed", exc_info=True)
+
+        return {"news_items": all_news}
 
 
 class MarketDataCollector(DataCollector):

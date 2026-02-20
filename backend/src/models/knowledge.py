@@ -8,7 +8,7 @@ import enum
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import Enum, Float, String, Text, func
+from sqlalchemy import Boolean, Enum, Float, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -78,6 +78,19 @@ class KnowledgeEntry(Base):
         "metadata", JSON, nullable=True, default=dict
     )
     expires_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
+
+    # File upload and ownership fields
+    uploaded_by_user_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    is_public: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true", nullable=False,
+    )
+    file_name: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    file_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     def __repr__(self) -> str:
         return (

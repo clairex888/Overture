@@ -353,6 +353,11 @@ class AgentEngine:
                 },
                 "reasoning": result.reasoning,
                 "flags": result.flags,
+                "chain_of_thought": [
+                    s.to_dict() for s in getattr(result, "chain_of_thought", [])
+                ],
+                "key_findings": getattr(result, "key_findings", []),
+                "suggested_actions": getattr(result, "suggested_actions", []),
             }
             output.append((idea, result_dict))
 

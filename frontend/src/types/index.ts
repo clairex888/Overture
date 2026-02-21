@@ -38,6 +38,8 @@ export interface Idea {
   notes: string | null;
   validation_result: Record<string, any> | null;
   execution_plan: Record<string, any> | null;
+  feedback_up: number;
+  feedback_down: number;
   created_at: string;
   updated_at: string;
 }

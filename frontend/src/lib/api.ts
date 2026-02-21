@@ -181,6 +181,14 @@ export const ideasAPI = {
     fetchAPI<{ running: boolean; iterations: number; active_domains: string[] | null }>(
       '/api/ideas/auto-generate/status',
     ),
+  feedback: (id: string, vote: 'up' | 'down', comment?: string) =>
+    fetchAPI<{ id: string; vote: string; total_up: number; total_down: number }>(
+      `/api/ideas/${id}/feedback`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ vote, comment: comment || null }),
+      },
+    ),
 };
 
 // Portfolio API

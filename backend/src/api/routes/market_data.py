@@ -357,6 +357,81 @@ class AssetSummary(BaseModel):
     cached: bool = False
 
 
+# ---------------------------------------------------------------------------
+# Centralized Price Cache endpoints
+# ---------------------------------------------------------------------------
+
+
+class PriceRefreshResponse(BaseModel):
+    success: bool
+    tickers_updated: int
+    last_refresh: str | None
+    is_refreshing: bool
+
+
+class PriceCacheStatus(BaseModel):
+    tickers_cached: int
+    last_refresh: str | None
+    is_refreshing: bool
+    refresh_interval_seconds: int
+    prices: dict[str, dict[str, Any]]
+
+
+@router.post("/refresh-prices", response_model=PriceRefreshResponse)
+async def refresh_prices():
+    """Force-refresh all portfolio prices from the centralized cache.
+
+    Any user can trigger this; the updated prices become immediately
+    visible to all users on the platform.
+    """
+    from src.services.price_cache import PriceCacheService
+
+    cache = PriceCacheService.get_instance()
+    await cache.refresh_prices()
+    return PriceRefreshResponse(
+        success=True,
+        tickers_updated=len(cache.get_all_prices()),
+        last_refresh=(
+            cache.last_refresh.isoformat() + "Z" if cache.last_refresh else None
+        ),
+        is_refreshing=cache.is_refreshing,
+    )
+
+
+@router.get("/price-cache-status", response_model=PriceCacheStatus)
+async def get_price_cache_status():
+    """Return the current state of the centralized price cache."""
+    from src.services.price_cache import PriceCacheService
+
+    cache = PriceCacheService.get_instance()
+    all_prices = cache.get_all_prices()
+    prices_dict = {
+        ticker: {
+            "price": cp.price,
+            "prev_close": cp.prev_close,
+            "change": cp.change,
+            "change_pct": cp.change_pct,
+            "volume": cp.volume,
+            "updated_at": cp.updated_at.isoformat() + "Z",
+        }
+        for ticker, cp in all_prices.items()
+    }
+    return PriceCacheStatus(
+        tickers_cached=len(all_prices),
+        last_refresh=(
+            cache.last_refresh.isoformat() + "Z" if cache.last_refresh else None
+        ),
+        is_refreshing=cache.is_refreshing,
+        refresh_interval_seconds=cache.refresh_interval,
+        prices=prices_dict,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Asset Detail Endpoints (info, news, social, summary)
+# ---------------------------------------------------------------------------
+
+
 @router.get("/info/{symbol}", response_model=AssetInfo)
 async def get_asset_info(
     symbol: str,

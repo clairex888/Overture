@@ -344,7 +344,7 @@ async def list_portfolios(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Return all portfolios for the current user."""
+    """Return all portfolios for the current user with live PnL."""
     result = await session.execute(
         select(Portfolio)
         .where(Portfolio.user_id == user.id)
@@ -352,23 +352,46 @@ async def list_portfolios(
     )
     portfolios = result.scalars().all()
 
+    from src.services.price_cache import PriceCacheService
+    cache = PriceCacheService.get_instance()
+
     items: list[PortfolioListItem] = []
     for p in portfolios:
-        count_result = await session.execute(
-            select(func.count())
-            .select_from(PositionModel)
-            .where(PositionModel.portfolio_id == p.id)
+        pos_result = await session.execute(
+            select(PositionModel).where(PositionModel.portfolio_id == p.id)
         )
-        positions_count = count_result.scalar() or 0
+        positions = pos_result.scalars().all()
+        positions_count = len(positions)
+
+        # Compute live totals from cached prices
+        total_market_value = 0.0
+        total_pnl = 0.0
+        initial_invested = 0.0
+        for pos in positions:
+            cached = cache.get_price(pos.ticker)
+            cp = cached.price if cached else (pos.current_price or 0)
+            qty = pos.quantity or 0
+            entry = pos.avg_entry_price or 0
+            mv = qty * cp
+            total_market_value += mv
+            if entry > 0:
+                pnl = (cp - entry) * qty
+                if pos.direction == "short":
+                    pnl = -pnl
+                total_pnl += pnl
+                initial_invested += entry * qty
+
+        live_total = total_market_value + (p.cash or 0)
+        pnl_pct = (total_pnl / initial_invested * 100) if initial_invested > 0 else 0
 
         items.append(PortfolioListItem(
             id=p.id,
             name=p.name,
-            total_value=p.total_value or 0,
+            total_value=round(live_total, 2) if positions_count > 0 else (p.total_value or 0),
             cash=p.cash or 0,
-            invested=p.invested or 0,
-            pnl=p.pnl or 0,
-            pnl_pct=p.pnl_pct or 0,
+            invested=round(total_market_value, 2) if positions_count > 0 else (p.invested or 0),
+            pnl=round(total_pnl, 2),
+            pnl_pct=round(pnl_pct, 4),
             status=p.status.value if hasattr(p.status, "value") else str(p.status),
             positions_count=positions_count,
             created_at=_dt_iso(p.created_at),
@@ -383,30 +406,72 @@ async def get_portfolio_overview(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Get portfolio overview including total value, P&L, and allocation summary."""
+    """Get portfolio overview including total value, P&L, and allocation summary.
+
+    Uses the centralized price cache to compute dynamic PnL even when
+    no trades have occurred since portfolio construction.
+    """
     portfolio = await _get_portfolio(session, portfolio_id, user.id)
 
-    count_result = await session.execute(
-        select(func.count())
-        .select_from(PositionModel)
-        .where(PositionModel.portfolio_id == portfolio.id)
+    # Fetch positions to compute live PnL from cached prices
+    pos_result = await session.execute(
+        select(PositionModel).where(PositionModel.portfolio_id == portfolio.id)
     )
-    positions_count = count_result.scalar() or 0
+    positions = pos_result.scalars().all()
+    positions_count = len(positions)
+
+    # Try to use cached prices for live PnL
+    from src.services.price_cache import PriceCacheService
+    cache = PriceCacheService.get_instance()
+
+    total_market_value = 0.0
+    total_pnl = 0.0
+    day_pnl = 0.0
+    initial_invested = 0.0
+
+    for pos in positions:
+        cached = cache.get_price(pos.ticker)
+        current_price = cached.price if cached else (pos.current_price or 0)
+        qty = pos.quantity or 0
+        entry = pos.avg_entry_price or 0
+
+        mv = qty * current_price
+        total_market_value += mv
+
+        if entry > 0:
+            pnl = (current_price - entry) * qty
+            if pos.direction == "short":
+                pnl = -pnl
+            total_pnl += pnl
+            initial_invested += entry * qty
+
+        # Day P&L from price change
+        if cached and cached.change is not None:
+            day_pnl += cached.change * qty
+
+    total_value = total_market_value + (portfolio.cash or 0)
+    total_pnl_pct = (total_pnl / initial_invested * 100) if initial_invested > 0 else 0
+    day_pnl_pct = (day_pnl / total_value * 100) if total_value > 0 else 0
+
+    # Determine last_updated from cache or portfolio
+    last_updated = _dt_iso(portfolio.updated_at)
+    if cache.last_refresh:
+        last_updated = cache.last_refresh.isoformat() + "Z"
 
     result = PortfolioOverview(
-        total_value=portfolio.total_value or 0,
+        total_value=round(total_value, 2),
         cash=portfolio.cash or 0,
-        invested=portfolio.invested or 0,
-        total_pnl=portfolio.pnl or 0,
-        total_pnl_pct=portfolio.pnl_pct or 0,
-        day_pnl=0,
-        day_pnl_pct=0,
+        invested=round(total_market_value, 2),
+        total_pnl=round(total_pnl, 2),
+        total_pnl_pct=round(total_pnl_pct, 4),
+        day_pnl=round(day_pnl, 2),
+        day_pnl_pct=round(day_pnl_pct, 4),
         positions_count=positions_count,
-        last_updated=_dt_iso(portfolio.updated_at),
+        last_updated=last_updated,
     )
     logger.info(
-        "Overview for portfolio %s: invested=%.2f, positions=%d, total_value=%.2f",
-        portfolio.id, result.invested, result.positions_count, result.total_value,
+        "Overview for portfolio %s: invested=%.2f, positions=%d, total_value=%.2f, pnl=%.2f",
+        portfolio.id, result.invested, result.positions_count, result.total_value, result.total_pnl,
     )
     return result
 
@@ -417,7 +482,7 @@ async def list_positions(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """List all current portfolio positions."""
+    """List all current portfolio positions with live prices from cache."""
     portfolio = await _get_portfolio(session, portfolio_id, user.id)
 
     result = await session.execute(
@@ -426,7 +491,59 @@ async def list_positions(
         .order_by(PositionModel.market_value.desc().nullslast())
     )
     positions = result.scalars().all()
-    return [_position_to_response(p) for p in positions]
+
+    # Enrich with cached prices
+    from src.services.price_cache import PriceCacheService
+    cache = PriceCacheService.get_instance()
+    total_value = portfolio.total_value or 1
+
+    # Recompute total_value from live prices for accurate weights
+    live_market_values: list[float] = []
+    for pos in positions:
+        cached = cache.get_price(pos.ticker)
+        cp = cached.price if cached else (pos.current_price or 0)
+        live_market_values.append((pos.quantity or 0) * cp)
+    live_total = sum(live_market_values) + (portfolio.cash or 0)
+    if live_total > 0:
+        total_value = live_total
+
+    responses: list[Position] = []
+    for i, pos in enumerate(positions):
+        cached = cache.get_price(pos.ticker)
+        current_price = cached.price if cached else (pos.current_price or 0)
+        qty = pos.quantity or 0
+        entry = pos.avg_entry_price or 0
+        mv = live_market_values[i]
+
+        pnl = 0.0
+        pnl_pct = 0.0
+        if entry > 0:
+            pnl = (current_price - entry) * qty
+            pnl_pct = (current_price - entry) / entry * 100
+            if pos.direction == "short":
+                pnl = -pnl
+                pnl_pct = -pnl_pct
+
+        weight = mv / total_value if total_value > 0 else 0
+
+        responses.append(Position(
+            id=pos.id,
+            symbol=pos.ticker,
+            direction=pos.direction,
+            quantity=qty,
+            avg_entry_price=entry,
+            current_price=round(current_price, 4),
+            market_value=round(mv, 2),
+            unrealized_pnl=round(pnl, 2),
+            unrealized_pnl_pct=round(pnl_pct, 4),
+            weight=round(weight, 6),
+            asset_class=pos.asset_class or "unknown",
+            opened_at=_dt_iso(pos.created_at),
+        ))
+
+    # Sort by market value descending
+    responses.sort(key=lambda p: p.market_value, reverse=True)
+    return responses
 
 
 @router.get("/positions/{position_id}", response_model=Position)
@@ -570,26 +687,62 @@ async def get_performance(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Get portfolio performance metrics (returns, sharpe, drawdown, etc.)."""
+    """Get portfolio performance metrics using live cached prices."""
     portfolio = await _get_portfolio(session, portfolio_id, user.id)
 
-    total_pnl = portfolio.pnl or 0
-    total_val = portfolio.total_value or 1_000_000
-    initial = total_val - total_pnl
-    pnl_pct = total_pnl / initial if initial > 0 else 0
+    # Compute live PnL
+    from src.services.price_cache import PriceCacheService
+    cache = PriceCacheService.get_instance()
+
+    pos_result = await session.execute(
+        select(PositionModel).where(PositionModel.portfolio_id == portfolio.id)
+    )
+    positions = pos_result.scalars().all()
+
+    total_pnl = 0.0
+    initial_invested = 0.0
+    winners = 0
+    losers = 0
+    total_win_amount = 0.0
+    total_loss_amount = 0.0
+
+    for pos in positions:
+        cached = cache.get_price(pos.ticker)
+        cp = cached.price if cached else (pos.current_price or 0)
+        qty = pos.quantity or 0
+        entry = pos.avg_entry_price or 0
+        if entry > 0:
+            pnl = (cp - entry) * qty
+            if pos.direction == "short":
+                pnl = -pnl
+            total_pnl += pnl
+            initial_invested += entry * qty
+            if pnl >= 0:
+                winners += 1
+                total_win_amount += pnl
+            else:
+                losers += 1
+                total_loss_amount += abs(pnl)
+
+    pnl_pct = total_pnl / initial_invested if initial_invested > 0 else 0
+    total_positions = winners + losers
+    win_rate = winners / total_positions if total_positions > 0 else 0
+    avg_win = total_win_amount / winners if winners > 0 else 0
+    avg_loss = total_loss_amount / losers if losers > 0 else 0
+    profit_factor = total_win_amount / total_loss_amount if total_loss_amount > 0 else 0
 
     return PerformanceMetrics(
-        total_return=total_pnl,
-        total_return_pct=pnl_pct,
-        annualized_return_pct=pnl_pct,
+        total_return=round(total_pnl, 2),
+        total_return_pct=round(pnl_pct, 6),
+        annualized_return_pct=round(pnl_pct, 6),
         sharpe_ratio=0.0,
         sortino_ratio=0.0,
         max_drawdown=0.0,
         max_drawdown_duration_days=0,
-        win_rate=0.0,
-        avg_win=0.0,
-        avg_loss=0.0,
-        profit_factor=0.0,
+        win_rate=round(win_rate, 4),
+        avg_win=round(avg_win, 2),
+        avg_loss=round(avg_loss, 2),
+        profit_factor=round(profit_factor, 4),
         calmar_ratio=0.0,
         period_start=_dt_iso(portfolio.created_at),
         period_end=_now_iso(),
@@ -622,12 +775,28 @@ async def get_allocation(
         select(PositionModel).where(PositionModel.portfolio_id == portfolio.id)
     )
     positions = result.scalars().all()
-    total_val = portfolio.total_value or 1
+
+    # Use live prices for allocation
+    from src.services.price_cache import PriceCacheService
+    cache = PriceCacheService.get_instance()
+
+    total_market_value = 0.0
+    class_values: dict[str, float] = {}
+    for pos in positions:
+        cached = cache.get_price(pos.ticker)
+        cp = cached.price if cached else (pos.current_price or 0)
+        mv = (pos.quantity or 0) * cp
+        total_market_value += mv
+        ac = pos.asset_class or "other"
+        class_values[ac] = class_values.get(ac, 0) + mv
+
+    total_val = total_market_value + (portfolio.cash or 0)
+    if total_val <= 0:
+        total_val = 1
 
     current_alloc: dict[str, float] = {}
-    for pos in positions:
-        ac = pos.asset_class or "other"
-        current_alloc[ac] = current_alloc.get(ac, 0) + (pos.market_value or 0) / total_val
+    for ac, val in class_values.items():
+        current_alloc[ac] = val / total_val
     current_alloc["cash"] = (portfolio.cash or 0) / total_val
 
     all_categories = set(list(target_alloc.keys()) + list(current_alloc.keys()))
@@ -642,11 +811,15 @@ async def get_allocation(
             drift=round(current - target, 4),
         ))
 
+    last_updated = _now_iso()
+    if cache.last_refresh:
+        last_updated = cache.last_refresh.isoformat() + "Z"
+
     return AllocationBreakdown(
         by_asset_class=by_asset_class,
         by_sector=[],
         by_geography=[],
-        last_updated=_now_iso(),
+        last_updated=last_updated,
     )
 
 

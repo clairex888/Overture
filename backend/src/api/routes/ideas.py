@@ -69,6 +69,8 @@ class IdeaResponse(BaseModel):
     notes: str | None
     validation_result: dict[str, Any] | None
     execution_plan: dict[str, Any] | None
+    feedback_up: int = 0
+    feedback_down: int = 0
     created_at: str
     updated_at: str
 
@@ -157,6 +159,11 @@ def _idea_to_response(idea: Idea) -> IdeaResponse:
     source_agent = meta.get("source_agent") or None
     source_urls = meta.get("source_urls", [])
 
+    # Feedback counts
+    feedback_list = meta.get("feedback", [])
+    feedback_up = sum(1 for f in feedback_list if f.get("vote") == "up")
+    feedback_down = sum(1 for f in feedback_list if f.get("vote") == "down")
+
     return IdeaResponse(
         id=idea.id,
         title=idea.title,
@@ -173,6 +180,8 @@ def _idea_to_response(idea: Idea) -> IdeaResponse:
         notes=meta.get("notes"),
         validation_result=idea.validation_results,
         execution_plan=meta.get("execution_plan"),
+        feedback_up=feedback_up,
+        feedback_down=feedback_down,
         created_at=_dt_iso(idea.created_at),
         updated_at=_dt_iso(idea.updated_at),
     )
@@ -471,10 +480,11 @@ async def validate_idea(
     if not idea:
         raise HTTPException(status_code=404, detail=f"Idea {idea_id} not found")
 
-    if idea.status != IdeaStatus.GENERATED:
+    # Allow re-validation of already-validated or rejected ideas
+    if idea.status not in (IdeaStatus.GENERATED, IdeaStatus.VALIDATED, IdeaStatus.REJECTED):
         raise HTTPException(
             status_code=400,
-            detail=f"Idea must be in 'generated' status to validate, currently '{idea.status.value}'",
+            detail=f"Idea cannot be validated in '{idea.status.value}' status",
         )
 
     # Build idea dict for validators
@@ -605,6 +615,53 @@ async def update_idea(
     idea.metadata_ = meta
 
     return _idea_to_response(idea)
+
+
+class IdeaFeedbackRequest(BaseModel):
+    vote: str = Field(..., description="'up' or 'down'")
+    comment: str | None = Field(None, description="Optional feedback comment")
+
+
+class IdeaFeedbackResponse(BaseModel):
+    id: str
+    vote: str
+    total_up: int
+    total_down: int
+    comment: str | None
+
+
+@router.post("/{idea_id}/feedback", response_model=IdeaFeedbackResponse)
+async def submit_feedback(
+    idea_id: str,
+    payload: IdeaFeedbackRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Submit thumbs up/down feedback on an idea for RL training."""
+    result = await session.execute(select(Idea).where(Idea.id == idea_id))
+    idea = result.scalar_one_or_none()
+    if not idea:
+        raise HTTPException(status_code=404, detail=f"Idea {idea_id} not found")
+
+    meta = dict(idea.metadata_ or {})
+    feedback_list = meta.get("feedback", [])
+    feedback_list.append({
+        "vote": payload.vote,
+        "comment": payload.comment,
+        "timestamp": _now_iso(),
+    })
+    meta["feedback"] = feedback_list
+    idea.metadata_ = meta
+
+    total_up = sum(1 for f in feedback_list if f.get("vote") == "up")
+    total_down = sum(1 for f in feedback_list if f.get("vote") == "down")
+
+    return IdeaFeedbackResponse(
+        id=idea.id,
+        vote=payload.vote,
+        total_up=total_up,
+        total_down=total_down,
+        comment=payload.comment,
+    )
 
 
 @router.delete("/{idea_id}", status_code=204)

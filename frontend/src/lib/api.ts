@@ -84,7 +84,16 @@ async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> 
     const errorBody = await res.text().catch(() => '');
     throw new Error(`API error ${res.status}: ${errorBody || res.statusText}`);
   }
-  return res.json();
+
+  // Handle empty responses (204 No Content, or empty body)
+  if (res.status === 204 || res.headers.get('content-length') === '0') {
+    return undefined as unknown as T;
+  }
+  const text = await res.text();
+  if (!text) {
+    return undefined as unknown as T;
+  }
+  return JSON.parse(text);
 }
 
 // Auth API

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -67,11 +68,28 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.error("Knowledge seed FAILED: %s", exc, exc_info=True)
 
+    # Start the centralized price refresh background loop
+    _price_task: asyncio.Task | None = None
+    try:
+        from src.services.price_cache import price_refresh_loop
+        _price_task = asyncio.create_task(price_refresh_loop())
+        logger.info("Price refresh background loop started (30-min interval)")
+    except Exception as exc:
+        logger.warning("Price refresh loop failed to start: %s", exc)
+
     if _agent_engine_ok:
         logger.info("Agent engine ready (use /api/agents/idea-loop/start to begin)")
     else:
         logger.warning("Agent engine NOT available — agent features disabled")
     yield
+
+    # Shutdown: cancel price refresh loop
+    if _price_task is not None:
+        _price_task.cancel()
+        try:
+            await _price_task
+        except asyncio.CancelledError:
+            pass
 
     # Shutdown: stop any running agent loops
     if _agent_engine_ok and agent_engine is not None:

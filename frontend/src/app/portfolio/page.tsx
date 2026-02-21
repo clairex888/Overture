@@ -26,6 +26,8 @@ import {
   ChevronDown,
   X,
   Settings,
+  RefreshCw,
+  Clock,
 } from 'lucide-react';
 import {
   PieChart,
@@ -35,7 +37,7 @@ import {
   Tooltip,
   Legend,
 } from 'recharts';
-import { portfolioAPI, knowledgeAPI } from '@/lib/api';
+import { portfolioAPI, knowledgeAPI, marketDataAPI } from '@/lib/api';
 import type {
   PortfolioOverview,
   Position,
@@ -579,6 +581,10 @@ function PortfolioPageInner() {
     last_updated: '',
   });
 
+  // Price refresh state
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastPriceUpdate, setLastPriceUpdate] = useState<string | null>(null);
+
   // Success banner
   const [showApprovedBanner, setShowApprovedBanner] = useState(false);
 
@@ -598,7 +604,10 @@ function PortfolioPageInner() {
         knowledgeAPI.outlook(),
       ]);
 
-      if (results[0].status === 'fulfilled') setOverview(results[0].value);
+      if (results[0].status === 'fulfilled') {
+        setOverview(results[0].value);
+        setLastPriceUpdate(results[0].value.last_updated);
+      }
       if (results[1].status === 'fulfilled') setPositions(results[1].value);
       if (results[2].status === 'fulfilled') setRisk(results[2].value);
       if (results[3].status === 'fulfilled') setAllocation(results[3].value);
@@ -730,6 +739,25 @@ function PortfolioPageInner() {
       await loadPortfolioPage();
     } catch (err) {
       console.error('[Portfolio] Delete failed:', err);
+    }
+  };
+
+  const handleRefreshPrices = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const result = await marketDataAPI.refreshPrices();
+      if (result.last_refresh) {
+        setLastPriceUpdate(result.last_refresh);
+      }
+      // Reload portfolio data with updated prices
+      if (activePortfolioId) {
+        await fetchMonitoringData(activePortfolioId);
+      }
+    } catch (err) {
+      console.error('[Portfolio] Price refresh failed:', err);
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -880,12 +908,36 @@ function PortfolioPageInner() {
               New Portfolio
             </button>
           )}
+          {hasPortfolios && (
+            <button
+              onClick={handleRefreshPrices}
+              disabled={refreshing}
+              className="btn-secondary flex items-center gap-2 text-xs"
+              title="Refresh all asset prices"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+              {refreshing ? 'Refreshing...' : 'Refresh Prices'}
+            </button>
+          )}
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-dark-700 border border-white/[0.08]">
             <div className={`w-2 h-2 rounded-full ${hasPortfolios ? 'bg-profit' : 'bg-warning'} animate-pulse-slow`} />
             <span className="text-xs text-text-secondary">{hasPortfolios ? 'Live' : 'No Portfolio'}</span>
           </div>
         </div>
       </div>
+
+      {/* Last Updated Banner */}
+      {hasPortfolios && lastPriceUpdate && (
+        <div className="flex items-center justify-between px-4 py-2 rounded-lg bg-dark-700/50 border border-white/[0.06]">
+          <div className="flex items-center gap-2">
+            <Clock className="w-3.5 h-3.5 text-text-muted" />
+            <span className="text-xs text-text-muted">
+              Prices last updated: {new Date(lastPriceUpdate).toLocaleString()}
+            </span>
+          </div>
+          <span className="text-[10px] text-text-muted">Auto-refreshes every 30 min</span>
+        </div>
+      )}
 
       {/* If no portfolios, show empty state behind the modal */}
       {!hasPortfolios && (
@@ -933,7 +985,7 @@ function PortfolioPageInner() {
           ) : (
             <>
               {/* Summary Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
                 <div className="card animate-fade-in">
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
@@ -992,6 +1044,24 @@ function PortfolioPageInner() {
                         ? <TrendingUp className="w-5 h-5 text-profit" />
                         : <TrendingDown className="w-5 h-5 text-loss" />
                       }
+                    </div>
+                  </div>
+                </div>
+
+                <div className="card animate-fade-in">
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <p className="text-xs font-medium text-text-muted uppercase tracking-wider mb-1">Day P&L</p>
+                      <p className={`text-2xl font-bold ${overview.day_pnl >= 0 ? 'text-profit' : 'text-loss'} tracking-tight`}>
+                        {formatCurrencyDetailed(overview.day_pnl)}
+                      </p>
+                      <span className={`text-xs ${overview.day_pnl_pct >= 0 ? 'text-profit' : 'text-loss'} font-medium`}>
+                        {overview.day_pnl_pct >= 0 ? '+' : ''}{overview.day_pnl_pct.toFixed(2)}%
+                      </span>
+                      <span className="text-xs text-text-muted ml-1">today</span>
+                    </div>
+                    <div className={`w-10 h-10 rounded-lg ${overview.day_pnl >= 0 ? 'bg-profit-muted' : 'bg-loss-muted'} flex items-center justify-center`}>
+                      <Activity className={`w-5 h-5 ${overview.day_pnl >= 0 ? 'text-profit' : 'text-loss'}`} />
                     </div>
                   </div>
                 </div>

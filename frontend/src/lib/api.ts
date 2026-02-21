@@ -407,6 +407,19 @@ export const marketDataAPI = {
     fetchAPI<SocialPost[]>(`/api/market-data/social/${symbol}${refresh ? '?refresh=true' : ''}`),
   summary: (symbol: string, refresh = false) =>
     fetchAPI<AssetSummary>(`/api/market-data/summary/${symbol}${refresh ? '?refresh=true' : ''}`),
+  refreshPrices: () =>
+    fetchAPI<{ success: boolean; tickers_updated: number; last_refresh: string | null; is_refreshing: boolean }>(
+      '/api/market-data/refresh-prices',
+      { method: 'POST' },
+    ),
+  priceCacheStatus: () =>
+    fetchAPI<{
+      tickers_cached: number;
+      last_refresh: string | null;
+      is_refreshing: boolean;
+      refresh_interval_seconds: number;
+      prices: Record<string, any>;
+    }>('/api/market-data/price-cache-status'),
 };
 
 // Seed API

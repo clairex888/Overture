@@ -162,6 +162,34 @@ export interface AllocationBreakdown {
   last_updated: string;
 }
 
+export interface AggregatePortfolio {
+  total_aum: number;
+  total_cash: number;
+  total_invested: number;
+  total_pnl: number;
+  total_pnl_pct: number;
+  total_positions: number;
+  portfolio_count: number;
+  top_holdings: {
+    symbol: string;
+    market_value: number;
+    pnl: number;
+    weight: number;
+    asset_class: string;
+    portfolio: string;
+  }[];
+  sector_exposure: Record<string, number>;
+  last_updated: string;
+}
+
+export interface DashboardNewsItem {
+  title: string;
+  source: string;
+  url: string | null;
+  published: string | null;
+  domain: string | null;
+}
+
 export interface AgentStatusEntry {
   name: string;
   display_name: string;

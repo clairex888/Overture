@@ -1239,55 +1239,7 @@ function PortfolioPageInner() {
                 </div>
               </div>
 
-              {/* Market Outlook */}
-              <div className="card">
-                <h3 className="text-sm font-semibold text-text-primary mb-4">Market Outlook by Timeframe</h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  {outlookSections.map((section) => {
-                    const layer = section.data;
-                    const sentiment = layer.sentiment.toLowerCase();
-                    const sentimentLabel = sentiment.charAt(0).toUpperCase() + sentiment.slice(1);
-                    const OutlookIcon = outlookIcons[sentiment] || Minus;
-                    const colorClass = outlookColors[sentiment] || 'text-text-muted';
-
-                    return (
-                      <div key={section.title}>
-                        <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">
-                          {section.title}
-                        </h4>
-
-                        <div className="flex items-center justify-between p-2.5 rounded-lg bg-dark-800 mb-2">
-                          <span className="text-sm text-text-secondary">Sentiment</span>
-                          <div className="flex items-center gap-2">
-                            <span className={`text-xs font-medium ${colorClass}`}>
-                              {sentimentLabel}
-                            </span>
-                            <OutlookIcon className={`w-3.5 h-3.5 ${colorClass}`} />
-                            <span className="text-[10px] text-text-muted">{Math.round(layer.confidence * 100)}%</span>
-                          </div>
-                        </div>
-
-                        {layer.summary && (
-                          <p className="text-xs text-text-secondary mb-2 px-1 leading-relaxed">{layer.summary}</p>
-                        )}
-
-                        {layer.key_factors.length > 0 && (
-                          <div className="space-y-1">
-                            {layer.key_factors.map((factor, idx) => (
-                              <div
-                                key={idx}
-                                className="flex items-center justify-between p-2.5 rounded-lg bg-dark-800"
-                              >
-                                <span className="text-sm text-text-secondary">{factor}</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+              {/* Market outlook moved to Dashboard */}
             </>
           )}
         </>

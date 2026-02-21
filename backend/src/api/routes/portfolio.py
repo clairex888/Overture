@@ -1219,3 +1219,105 @@ async def delete_portfolio(
         success=True,
         message=f"Portfolio '{portfolio.name}' deleted successfully.",
     )
+
+
+# ---------------------------------------------------------------------------
+# Aggregate endpoint for dashboard
+# ---------------------------------------------------------------------------
+
+
+class AggregatePortfolioResponse(BaseModel):
+    total_aum: float
+    total_cash: float
+    total_invested: float
+    total_pnl: float
+    total_pnl_pct: float
+    total_positions: int
+    portfolio_count: int
+    top_holdings: list[dict[str, Any]] = Field(default_factory=list)
+    sector_exposure: dict[str, float] = Field(default_factory=dict)
+    last_updated: str
+
+
+@router.get("/aggregate", response_model=AggregatePortfolioResponse)
+async def get_aggregate(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Aggregate stats across ALL user portfolios for the dashboard."""
+    result = await session.execute(
+        select(Portfolio).where(Portfolio.user_id == user.id)
+    )
+    portfolios = result.scalars().all()
+
+    from src.services.price_cache import PriceCacheService
+    cache = PriceCacheService.get_instance()
+
+    total_aum = 0.0
+    total_cash = 0.0
+    total_invested = 0.0
+    total_pnl = 0.0
+    total_initial = 0.0
+    total_positions = 0
+    all_holdings: list[dict] = []
+    sector_map: dict[str, float] = {}
+
+    for p in portfolios:
+        pos_result = await session.execute(
+            select(PositionModel).where(PositionModel.portfolio_id == p.id)
+        )
+        positions = pos_result.scalars().all()
+        total_positions += len(positions)
+        total_cash += p.cash or 0
+
+        for pos in positions:
+            cached = cache.get_price(pos.ticker)
+            cp = cached.price if cached else (pos.current_price or 0)
+            qty = pos.quantity or 0
+            entry = pos.avg_entry_price or 0
+            mv = qty * cp
+            total_invested += mv
+            pnl = (cp - entry) * qty if entry > 0 else 0
+            if pos.direction == "short":
+                pnl = -pnl
+            total_pnl += pnl
+            if entry > 0:
+                total_initial += entry * qty
+
+            all_holdings.append({
+                "symbol": pos.ticker,
+                "market_value": round(mv, 2),
+                "pnl": round(pnl, 2),
+                "weight": 0,  # computed below
+                "asset_class": pos.asset_class or "equity",
+                "portfolio": p.name,
+            })
+
+            ac = pos.asset_class or "equity"
+            sector_map[ac] = sector_map.get(ac, 0) + mv
+
+    total_aum = total_invested + total_cash
+
+    # Compute weights and sort for top holdings
+    for h in all_holdings:
+        h["weight"] = round(h["market_value"] / total_aum * 100, 2) if total_aum > 0 else 0
+    all_holdings.sort(key=lambda x: x["market_value"], reverse=True)
+
+    # Normalize sector exposure to percentages
+    for k in sector_map:
+        sector_map[k] = round(sector_map[k] / total_aum * 100, 2) if total_aum > 0 else 0
+
+    pnl_pct = (total_pnl / total_initial * 100) if total_initial > 0 else 0
+
+    return AggregatePortfolioResponse(
+        total_aum=round(total_aum, 2),
+        total_cash=round(total_cash, 2),
+        total_invested=round(total_invested, 2),
+        total_pnl=round(total_pnl, 2),
+        total_pnl_pct=round(pnl_pct, 4),
+        total_positions=total_positions,
+        portfolio_count=len(portfolios),
+        top_holdings=all_holdings[:10],
+        sector_exposure=sector_map,
+        last_updated=datetime.utcnow().isoformat() + "Z",
+    )

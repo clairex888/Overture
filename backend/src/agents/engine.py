@@ -64,6 +64,12 @@ class AgentEngine:
     - WebSocket notifications (future)
     """
 
+    # Canonical agent keys — shared with frontend stage definitions
+    AGENT_KEYS = [
+        "idea_generator", "idea_validator", "trade_executor",
+        "trade_monitor", "portfolio_manager", "risk_manager", "knowledge",
+    ]
+
     def __init__(self) -> None:
         self._idea_loop_task: asyncio.Task | None = None
         self._portfolio_loop_task: asyncio.Task | None = None
@@ -78,6 +84,17 @@ class AgentEngine:
         self._agent_messages: list[dict] = []
         self._pending_approvals: list[dict] = []
         self._alerts: list[dict] = []
+
+        # Per-agent tracking
+        self._agent_stats: dict[str, dict] = {
+            key: {
+                "tasks_completed": 0,
+                "errors": 0,
+                "last_run": None,
+                "current_task": None,
+            }
+            for key in self.AGENT_KEYS
+        }
 
     # -----------------------------------------------------------------
     # Idea Loop Control
@@ -99,6 +116,19 @@ class AgentEngine:
             """Callback after each idea loop iteration."""
             self._iteration_counts["idea"] += 1
             self._idea_state = dict(state)
+
+            # Record per-agent activity from this iteration
+            raw = state.get("raw_ideas", [])
+            validated = state.get("validated_ideas", [])
+            plans = state.get("execution_plans", [])
+            alerts_count = len(state.get("trade_alerts", []))
+            if raw:
+                self._record_agent_run("idea_generator", f"Generated {len(raw)} ideas")
+            if validated or state.get("rejected_ideas"):
+                self._record_agent_run("idea_validator", f"Validated {len(validated)} ideas")
+            if plans:
+                self._record_agent_run("trade_executor", f"Created {len(plans)} plans")
+            self._record_agent_run("trade_monitor", f"Monitored, {alerts_count} alerts")
 
             # Capture messages and approvals
             messages = state.get("agent_messages", [])
@@ -298,9 +328,15 @@ class AgentEngine:
             ] or None
 
         # ── Step 4: Run parallel analysts ──
-        raw_ideas = await run_parallel_generators(
-            enriched_data, context, llm, generators=selected_generators
-        )
+        self._set_agent_task("idea_generator", "Generating ideas from live data")
+        try:
+            raw_ideas = await run_parallel_generators(
+                enriched_data, context, llm, generators=selected_generators
+            )
+            self._record_agent_run("idea_generator", f"Generated {len(raw_ideas)} ideas")
+        except Exception:
+            self._record_agent_run("idea_generator", error=True)
+            raise
 
         # ── Step 5: Stamp ideas with IDs and timestamps ──
         for idea in raw_ideas:
@@ -309,6 +345,16 @@ class AgentEngine:
             idea.setdefault("status", "raw")
 
         logger.info("Single-shot generation produced %d ideas", len(raw_ideas))
+
+        # Log to agent messages for activity feed
+        self._agent_messages.append({
+            "agent": "idea_generator",
+            "node": "generate",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "summary": f"On-demand generation produced {len(raw_ideas)} ideas",
+        })
+        self._agent_messages = self._agent_messages[-200:]
+
         return raw_ideas
 
     async def validate_ideas_once(
@@ -335,7 +381,22 @@ class AgentEngine:
             if "min_reasoning_score" in thresholds:
                 vt.min_reasoning_score = thresholds["min_reasoning_score"]
 
-        results = await validate_ideas_batch(ideas, context, llm, vt)
+        self._set_agent_task("idea_validator", f"Validating {len(ideas)} ideas")
+        try:
+            results = await validate_ideas_batch(ideas, context, llm, vt)
+            self._record_agent_run("idea_validator", f"Validated {len(ideas)} ideas")
+        except Exception:
+            self._record_agent_run("idea_validator", error=True)
+            raise
+
+        # Log to agent messages
+        self._agent_messages.append({
+            "agent": "idea_validator",
+            "node": "validate",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "summary": f"On-demand validation completed for {len(ideas)} ideas",
+        })
+        self._agent_messages = self._agent_messages[-200:]
 
         output = []
         for idea, result in results:
@@ -402,48 +463,64 @@ class AgentEngine:
             "recent_messages": self._agent_messages[-20:],
         }
 
+    def _record_agent_run(self, agent_key: str, task_desc: str | None = None, error: bool = False) -> None:
+        """Record an agent task completion or error."""
+        stats = self._agent_stats.get(agent_key)
+        if not stats:
+            return
+        stats["last_run"] = datetime.now(timezone.utc).isoformat()
+        if error:
+            stats["errors"] += 1
+        else:
+            stats["tasks_completed"] += 1
+        stats["current_task"] = task_desc
+
+    def _set_agent_task(self, agent_key: str, task_desc: str | None) -> None:
+        """Set the current task description for an agent."""
+        stats = self._agent_stats.get(agent_key)
+        if stats:
+            stats["current_task"] = task_desc
+
     def get_agent_statuses(self) -> dict:
-        """Return individual agent statuses for the frontend."""
-        now_iso = datetime.now(timezone.utc).isoformat()
+        """Return individual agent statuses for the frontend.
+
+        Agent keys match the canonical AGENT_KEYS used by the frontend
+        stage definitions so status resolution works correctly.
+        """
         idea_running = self._idea_loop_running
         portfolio_running = self._portfolio_loop_running
 
-        def _agent_status(name: str, agent_type: str, running: bool) -> dict:
-            return {
-                "name": name,
-                "type": agent_type,
-                "status": "running" if running else "idle",
-                "last_run": now_iso,
-                "tasks_completed": self._iteration_counts.get(
-                    "idea" if "idea" in agent_type or "generation" in agent_type
-                    else "portfolio", 0
-                ),
-                "errors": 0,
-            }
-
-        agents = {
-            "idea_generation": _agent_status(
-                "Parallel Idea Generators", "idea_generation", idea_running
-            ),
-            "idea_validation": _agent_status(
-                "Parallel Validators", "idea_validation", idea_running
-            ),
-            "trade_execution": _agent_status(
-                "Trade Executor", "trade_execution", idea_running
-            ),
-            "trade_monitoring": _agent_status(
-                "Trade Monitor", "trade_monitoring", idea_running
-            ),
-            "portfolio_management": _agent_status(
-                "Portfolio Constructor", "portfolio_management", portfolio_running
-            ),
-            "risk_management": _agent_status(
-                "Risk Manager", "risk_management", portfolio_running
-            ),
-            "knowledge": _agent_status(
-                "Knowledge Curator", "knowledge", True  # always "on"
-            ),
+        _AGENT_META = {
+            "idea_generator": ("Parallel Idea Generators", idea_running),
+            "idea_validator": ("Parallel Validators", idea_running),
+            "trade_executor": ("Trade Executor", idea_running),
+            "trade_monitor": ("Trade Monitor", idea_running),
+            "portfolio_manager": ("Portfolio Constructor", portfolio_running),
+            "risk_manager": ("Risk Manager", portfolio_running),
+            "knowledge": ("Knowledge Curator", True),
         }
+
+        agents = {}
+        for key in self.AGENT_KEYS:
+            display_name, running = _AGENT_META[key]
+            stats = self._agent_stats[key]
+            # Compute uptime from loop start time
+            loop_key = "idea" if key in ("idea_generator", "idea_validator", "trade_executor", "trade_monitor") else "portfolio"
+            started = self._started_at.get(loop_key)
+            uptime = 0.0
+            if running and started:
+                uptime = (datetime.now(timezone.utc) - started).total_seconds()
+
+            agents[key] = {
+                "name": display_name,
+                "type": key,
+                "status": "running" if running else "idle",
+                "last_run": stats["last_run"],
+                "tasks_completed": stats["tasks_completed"],
+                "errors": stats["errors"],
+                "current_task": stats["current_task"],
+                "uptime_seconds": round(uptime, 1),
+            }
 
         return {
             "agents": agents,

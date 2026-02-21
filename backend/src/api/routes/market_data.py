@@ -817,3 +817,47 @@ async def get_asset_summary(
     result_dict["cached"] = False
     _cache_set("summary", symbol, result_dict, fetched_at)
     return AssetSummary(**result_dict)
+
+
+# ---------------------------------------------------------------------------
+# Latest news from the data pipeline (for dashboard)
+# ---------------------------------------------------------------------------
+
+
+class DashboardNewsItem(BaseModel):
+    title: str
+    source: str
+    url: str | None = None
+    published: str | None = None
+    domain: str | None = None
+
+
+@router.get("/latest-news", response_model=list[DashboardNewsItem])
+async def get_latest_news(limit: int = 10):
+    """Return the most recent news items collected by the data pipeline.
+
+    Pulls from the last DataPipeline.collect() snapshot. If no data
+    pipeline is available, returns an empty list.
+    """
+    try:
+        from src.services.data_pipeline import data_pipeline
+        if data_pipeline is None:
+            return []
+        # Use cached snapshot if available, otherwise quick collect
+        snapshot = getattr(data_pipeline, "_last_snapshot", None)
+        if snapshot is None:
+            snapshot = await data_pipeline.collect()
+        items = snapshot.news_items[:limit] if snapshot.news_items else []
+        return [
+            DashboardNewsItem(
+                title=item.get("title", "Untitled"),
+                source=item.get("source", "Unknown"),
+                url=item.get("url") or item.get("link"),
+                published=item.get("published") or item.get("pub_date"),
+                domain=item.get("domain"),
+            )
+            for item in items
+        ]
+    except Exception as exc:
+        logger.warning("Failed to fetch latest news: %s", exc)
+        return []

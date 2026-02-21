@@ -47,14 +47,14 @@ const ideaLoopStageDefinitions = [
   { id: 'generate', label: 'Generate', description: 'Scanning sources for ideas', agentNames: ['idea_generator'] },
   { id: 'validate', label: 'Validate', description: 'Multi-factor validation', agentNames: ['idea_validator'] },
   { id: 'execute', label: 'Execute', description: 'Awaiting trade approval', agentNames: ['trade_executor'] },
-  { id: 'monitor', label: 'Monitor', description: 'Tracking open positions', agentNames: ['position_monitor'] },
+  { id: 'monitor', label: 'Monitor', description: 'Tracking open positions', agentNames: ['trade_monitor'] },
 ];
 
 const portfolioLoopStageDefinitions = [
   { id: 'assess', label: 'Assess', description: 'Evaluating portfolio state', agentNames: ['portfolio_manager'] },
-  { id: 'construct', label: 'Construct', description: 'Optimizing allocations', agentNames: ['portfolio_constructor'] },
-  { id: 'risk_monitor', label: 'Risk Monitor', description: 'Computing VaR & exposures', agentNames: ['risk_monitor'] },
-  { id: 'rebalance', label: 'Rebalance', description: 'Rebalancing portfolio', agentNames: ['rebalancer'] },
+  { id: 'construct', label: 'Construct', description: 'Optimizing allocations', agentNames: ['portfolio_manager'] },
+  { id: 'risk_monitor', label: 'Risk Monitor', description: 'Computing VaR & exposures', agentNames: ['risk_manager'] },
+  { id: 'rebalance', label: 'Rebalance', description: 'Rebalancing portfolio', agentNames: ['portfolio_manager'] },
 ];
 
 // --- Helpers ---
@@ -75,15 +75,12 @@ function mapLogStatus(status: string): string {
 }
 
 function formatUptime(uptimeSeconds: number): string {
-  if (uptimeSeconds <= 0) return '0%';
-  // Approximate uptime percentage assuming the agent has been expected to run
-  // for the total elapsed time since deployment. For display we compute as
-  // a ratio: if uptime > 24h treat it as near-100%.
-  const hours = uptimeSeconds / 3600;
-  if (hours >= 24) return '99.9%';
-  if (hours >= 12) return '99.5%';
-  if (hours >= 1) return '98%';
-  return `${Math.min(100, (uptimeSeconds / 3600) * 100).toFixed(1)}%`;
+  if (uptimeSeconds <= 0) return 'Offline';
+  const hours = Math.floor(uptimeSeconds / 3600);
+  const minutes = Math.floor((uptimeSeconds % 3600) / 60);
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${Math.floor(uptimeSeconds)}s`;
 }
 
 function formatTimestamp(timestamp: string): string {
@@ -96,11 +93,12 @@ function formatTimestamp(timestamp: string): string {
 }
 
 function getAgentType(agentName: string): string {
-  const ideaAgents = ['idea_generator', 'idea_validator', 'trade_executor', 'position_monitor', 'knowledge_curator'];
-  const portfolioAgents = ['portfolio_manager', 'portfolio_constructor', 'risk_monitor', 'rebalancer'];
+  const ideaAgents = ['idea_generator', 'idea_validator', 'trade_executor', 'trade_monitor'];
+  const portfolioAgents = ['portfolio_manager', 'risk_manager'];
   if (ideaAgents.includes(agentName)) return 'Idea Loop';
   if (portfolioAgents.includes(agentName)) return 'Portfolio Loop';
-  return 'Training';
+  if (agentName === 'knowledge') return 'Knowledge';
+  return 'System';
 }
 
 function formatLastRun(lastRun: string | null): string {

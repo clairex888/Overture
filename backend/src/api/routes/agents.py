@@ -98,14 +98,14 @@ async def get_agents_status():
     agents: list[AgentStatus] = []
     for key, data in agents_data.items():
         agents.append(AgentStatus(
-            name=data.get("name", key),
+            name=key,
             display_name=data.get("name", key),
             status=data.get("status", "idle"),
-            current_task=None,
+            current_task=data.get("current_task"),
             last_run=data.get("last_run"),
             run_count=data.get("tasks_completed", 0),
             error_count=data.get("errors", 0),
-            uptime_seconds=0.0,
+            uptime_seconds=data.get("uptime_seconds", 0.0),
         ))
 
     return AllAgentsStatus(

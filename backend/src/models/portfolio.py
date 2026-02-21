@@ -1,10 +1,10 @@
-"""Portfolio and Position models for the Overture system."""
+"""Portfolio, Position, and PortfolioSnapshot models for the Overture system."""
 
 import enum
-from datetime import datetime
+from datetime import datetime, date as date_type
 from typing import Any, Optional
 
-from sqlalchemy import Enum, Float, ForeignKey, String, Text, func
+from sqlalchemy import Enum, Float, ForeignKey, String, Text, Date, func
 from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -114,3 +114,29 @@ class Position(Base):
             f"<Position(id={self.id!r}, ticker={self.ticker!r}, "
             f"direction={self.direction!r}, quantity={self.quantity!r})>"
         )
+
+
+class PortfolioSnapshot(Base):
+    """Daily snapshot of portfolio value for historical tracking.
+
+    Recorded by the price-cache refresh loop so the dashboard can
+    display a real portfolio value chart.
+    """
+
+    __tablename__ = "portfolio_snapshots"
+
+    portfolio_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("portfolios.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    snapshot_date: Mapped[date_type] = mapped_column(Date, nullable=False, index=True)
+    total_value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    invested: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    cash: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pnl: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    positions_count: Mapped[Optional[int]] = mapped_column(nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<PortfolioSnapshot(portfolio_id={self.portfolio_id!r}, date={self.snapshot_date!r}, value={self.total_value!r})>"

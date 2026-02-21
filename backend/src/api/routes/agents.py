@@ -123,11 +123,15 @@ async def get_agent_logs(
     status: str | None = Query(None, description="Filter by status"),
     limit: int = Query(50, ge=1, le=500),
 ):
-    """Get recent agent activity logs."""
-    logs = agent_engine.get_logs(limit=limit)
+    """Get recent agent activity logs.
 
+    Merges in-memory agent messages with persisted DB logs for a
+    complete view of agent activity.
+    """
+    # In-memory logs from the engine
+    mem_logs = agent_engine.get_logs(limit=limit)
     results = []
-    for msg in logs:
+    for msg in mem_logs:
         entry = {
             "id": str(uuid4()),
             "timestamp": msg.get("timestamp", _now_iso()),
@@ -139,6 +143,30 @@ async def get_agent_logs(
         }
         results.append(entry)
 
+    # Also pull recent persisted logs from DB
+    try:
+        from sqlalchemy import select
+        from src.models.base import async_session_factory
+        from src.models.agent_state import AgentLog
+
+        async with async_session_factory() as session:
+            stmt = select(AgentLog).order_by(AgentLog.created_at.desc()).limit(limit)
+            if agent_type:
+                stmt = stmt.where(AgentLog.agent_name.ilike(f"%{agent_type}%"))
+            db_result = await session.execute(stmt)
+            for log in db_result.scalars().all():
+                results.append({
+                    "id": log.id,
+                    "timestamp": log.created_at.isoformat() + "Z" if log.created_at else _now_iso(),
+                    "agent_name": log.agent_name,
+                    "action": log.action,
+                    "status": log.status.value if log.status else "completed",
+                    "details": {},
+                    "duration_ms": log.duration_ms,
+                })
+    except Exception:
+        pass  # Fall back to in-memory only
+
     if agent_type:
         results = [r for r in results if agent_type in r["agent_name"].lower()]
     if action:
@@ -146,8 +174,17 @@ async def get_agent_logs(
     if status:
         results = [r for r in results if r["status"] == status]
 
-    results.sort(key=lambda r: r["timestamp"], reverse=True)
-    return [AgentLogEntry(**r) for r in results[:limit]]
+    # Deduplicate by timestamp+agent (in-memory and DB may overlap)
+    seen = set()
+    deduped = []
+    for r in results:
+        key = (r["timestamp"], r["agent_name"], r["action"])
+        if key not in seen:
+            seen.add(key)
+            deduped.append(r)
+
+    deduped.sort(key=lambda r: r["timestamp"], reverse=True)
+    return [AgentLogEntry(**r) for r in deduped[:limit]]
 
 
 @router.get("/logs/{agent_name}", response_model=list[AgentLogEntry])

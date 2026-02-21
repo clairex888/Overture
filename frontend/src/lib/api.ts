@@ -16,6 +16,7 @@ import type {
   PortfolioInitResult,
   AggregatePortfolio,
   DashboardNewsItem,
+  PortfolioHistoryPoint,
   AllAgentsStatus,
   AgentLogEntry,
   LoopControlResponse,
@@ -270,6 +271,10 @@ export const portfolioAPI = {
     }),
   aggregate: () =>
     fetchAPI<AggregatePortfolio>('/api/portfolio/aggregate'),
+  history: (days = 90, portfolioId?: string) =>
+    fetchAPI<PortfolioHistoryPoint[]>(
+      `/api/portfolio/history?days=${days}${portfolioId ? `&portfolio_id=${portfolioId}` : ''}`,
+    ),
 };
 
 // Trades API

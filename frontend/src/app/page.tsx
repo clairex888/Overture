@@ -36,6 +36,7 @@ import {
   knowledgeAPI,
   marketDataAPI,
 } from '@/lib/api';
+import PortfolioChart from '@/components/charts/PortfolioChart';
 import type {
   Alert,
   Idea,
@@ -47,6 +48,7 @@ import type {
   MarketOutlook,
   PortfolioListItem,
   DashboardNewsItem,
+  PortfolioHistoryPoint,
 } from '@/types';
 
 // --- Helpers ---
@@ -121,6 +123,7 @@ export default function Dashboard() {
   const [activeTrades, setActiveTrades] = useState<ActiveSummary | null>(null);
   const [outlook, setOutlook] = useState<MarketOutlook | null>(null);
   const [news, setNews] = useState<DashboardNewsItem[]>([]);
+  const [history, setHistory] = useState<PortfolioHistoryPoint[]>([]);
   const [ideaLoopRunning, setIdeaLoopRunning] = useState(false);
   const [portfolioLoopRunning, setPortfolioLoopRunning] = useState(false);
   const [togglingIdeaLoop, setTogglingIdeaLoop] = useState(false);
@@ -185,6 +188,7 @@ export default function Dashboard() {
           activeData,
           outlookData,
           newsData,
+          historyData,
         ] = await Promise.all([
           alertsAPI.list().catch(() => [] as Alert[]),
           agentsAPI.status().catch(() => null),
@@ -195,6 +199,7 @@ export default function Dashboard() {
           tradesAPI.active().catch(() => null),
           knowledgeAPI.outlook().catch(() => null),
           marketDataAPI.latestNews(8).catch(() => [] as DashboardNewsItem[]),
+          portfolioAPI.history(90).catch(() => [] as PortfolioHistoryPoint[]),
         ]);
 
         setAlerts(alertsData);
@@ -206,6 +211,7 @@ export default function Dashboard() {
         setActiveTrades(activeData);
         setOutlook(outlookData);
         setNews(newsData);
+        setHistory(historyData);
         if (agentsData) {
           setIdeaLoopRunning(agentsData.idea_loop_running);
           setPortfolioLoopRunning(agentsData.portfolio_loop_running);
@@ -478,6 +484,23 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      {/* ── Portfolio Value Chart (only shown when history exists) ── */}
+      {history.length > 1 && (
+        <div className="card">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+              <BarChart3 className="w-4 h-4 text-info" />
+              Portfolio Value Over Time
+            </h3>
+            <span className="text-[10px] text-text-muted">{history.length} days</span>
+          </div>
+          <PortfolioChart
+            data={history.map((h) => ({ date: h.date, value: h.total_value }))}
+            height={250}
+          />
+        </div>
+      )}
 
       {/* ── Row 3: News + Alerts + Opportunities ── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

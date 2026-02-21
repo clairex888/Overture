@@ -190,6 +190,12 @@ export interface DashboardNewsItem {
   domain: string | null;
 }
 
+export interface PortfolioHistoryPoint {
+  date: string;
+  total_value: number;
+  pnl: number;
+}
+
 export interface AgentStatusEntry {
   name: string;
   display_name: string;

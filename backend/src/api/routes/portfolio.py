@@ -17,7 +17,7 @@ from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.base import get_session
-from src.models.portfolio import Portfolio, Position as PositionModel, PortfolioStatus
+from src.models.portfolio import Portfolio, Position as PositionModel, PortfolioStatus, PortfolioSnapshot
 from src.models.trade import Trade, TradeStatus, TradeDirection, InstrumentType
 from src.models.user import User
 from src.auth import get_current_user
@@ -1321,3 +1321,89 @@ async def get_aggregate(
         sector_exposure=sector_map,
         last_updated=datetime.utcnow().isoformat() + "Z",
     )
+
+
+# ---------------------------------------------------------------------------
+# Portfolio history endpoint
+# ---------------------------------------------------------------------------
+
+
+class PortfolioHistoryPoint(BaseModel):
+    date: str
+    total_value: float
+    pnl: float
+
+
+@router.get("/history", response_model=list[PortfolioHistoryPoint])
+async def get_portfolio_history(
+    portfolio_id: str | None = Query(None, description="Specific portfolio, or all if omitted"),
+    days: int = Query(90, ge=7, le=365),
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Return daily portfolio value snapshots for the chart.
+
+    If no snapshots exist yet, returns a single point for today's value.
+    """
+    from datetime import timedelta, date as date_type
+    from sqlalchemy import func as sqlfunc
+
+    cutoff = date_type.today() - timedelta(days=days)
+
+    if portfolio_id:
+        # Verify ownership
+        await _get_portfolio_by_id(session, portfolio_id, user.id)
+        stmt = (
+            select(
+                PortfolioSnapshot.snapshot_date,
+                PortfolioSnapshot.total_value,
+                PortfolioSnapshot.pnl,
+            )
+            .where(PortfolioSnapshot.portfolio_id == portfolio_id)
+            .where(PortfolioSnapshot.snapshot_date >= cutoff)
+            .order_by(PortfolioSnapshot.snapshot_date)
+        )
+    else:
+        # Aggregate across all user portfolios
+        p_ids = await session.execute(
+            select(Portfolio.id).where(Portfolio.user_id == user.id)
+        )
+        ids = [r[0] for r in p_ids.all()]
+        if not ids:
+            return []
+        stmt = (
+            select(
+                PortfolioSnapshot.snapshot_date,
+                sqlfunc.sum(PortfolioSnapshot.total_value).label("total_value"),
+                sqlfunc.sum(PortfolioSnapshot.pnl).label("pnl"),
+            )
+            .where(PortfolioSnapshot.portfolio_id.in_(ids))
+            .where(PortfolioSnapshot.snapshot_date >= cutoff)
+            .group_by(PortfolioSnapshot.snapshot_date)
+            .order_by(PortfolioSnapshot.snapshot_date)
+        )
+
+    result = await session.execute(stmt)
+    rows = result.all()
+
+    if not rows:
+        # No history yet — return current value as a single point
+        agg = await session.execute(
+            select(Portfolio).where(Portfolio.user_id == user.id)
+        )
+        portfolios = agg.scalars().all()
+        total = sum((p.total_value or 0) for p in portfolios)
+        return [PortfolioHistoryPoint(
+            date=date_type.today().isoformat(),
+            total_value=round(total, 2),
+            pnl=0,
+        )]
+
+    return [
+        PortfolioHistoryPoint(
+            date=r.snapshot_date.isoformat() if hasattr(r.snapshot_date, 'isoformat') else str(r.snapshot_date),
+            total_value=round(float(r.total_value or 0), 2),
+            pnl=round(float(r.pnl or 0), 2),
+        )
+        for r in rows
+    ]

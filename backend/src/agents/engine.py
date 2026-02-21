@@ -464,7 +464,7 @@ class AgentEngine:
         }
 
     def _record_agent_run(self, agent_key: str, task_desc: str | None = None, error: bool = False) -> None:
-        """Record an agent task completion or error."""
+        """Record an agent task completion or error, and persist to DB."""
         stats = self._agent_stats.get(agent_key)
         if not stats:
             return
@@ -475,11 +475,48 @@ class AgentEngine:
             stats["tasks_completed"] += 1
         stats["current_task"] = task_desc
 
+        # Fire-and-forget DB persistence (non-blocking)
+        asyncio.ensure_future(self._persist_agent_log(
+            agent_key, task_desc or ("error" if error else "task"), error,
+        ))
+
     def _set_agent_task(self, agent_key: str, task_desc: str | None) -> None:
         """Set the current task description for an agent."""
         stats = self._agent_stats.get(agent_key)
         if stats:
             stats["current_task"] = task_desc
+
+    async def _persist_agent_log(self, agent_key: str, action: str, is_error: bool) -> None:
+        """Persist an agent log entry to the database."""
+        try:
+            from src.models.base import async_session_factory
+            from src.models.agent_state import AgentLog, AgentLogStatus, AgentType
+
+            # Map agent key to AgentType enum
+            type_map = {
+                "idea_generator": AgentType.IDEA_GENERATOR,
+                "idea_validator": AgentType.IDEA_VALIDATOR,
+                "trade_executor": AgentType.TRADE_EXECUTOR,
+                "trade_monitor": AgentType.TRADE_MONITOR,
+                "portfolio_manager": AgentType.PORTFOLIO_CONSTRUCTOR,
+                "risk_manager": AgentType.RISK_MANAGER,
+                "knowledge": AgentType.KNOWLEDGE_CURATOR,
+            }
+            agent_type = type_map.get(agent_key, AgentType.IDEA_GENERATOR)
+            status = AgentLogStatus.FAILURE if is_error else AgentLogStatus.SUCCESS
+
+            async with async_session_factory() as session:
+                log = AgentLog(
+                    id=str(uuid4()),
+                    agent_name=agent_key,
+                    agent_type=agent_type,
+                    action=action,
+                    status=status,
+                )
+                session.add(log)
+                await session.commit()
+        except Exception:
+            logger.debug("Failed to persist agent log (non-critical)", exc_info=True)
 
     def get_agent_statuses(self) -> dict:
         """Return individual agent statuses for the frontend.

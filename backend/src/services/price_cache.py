@@ -141,6 +141,9 @@ class PriceCacheService:
             # Persist updated prices to Position / Portfolio rows
             await self._update_portfolio_positions()
 
+            # Record daily portfolio snapshots for history chart
+            await self._record_portfolio_snapshots()
+
             return self._cache
         except Exception:
             logger.exception("Error during price refresh")
@@ -297,6 +300,83 @@ class PriceCacheService:
                 )
         except Exception:
             logger.exception("Error updating portfolio positions")
+
+    async def _record_portfolio_snapshots(self) -> None:
+        """Record a daily portfolio value snapshot for the history chart.
+
+        Only records one snapshot per portfolio per day (idempotent).
+        """
+        from datetime import date as date_type
+
+        from sqlalchemy import select
+        from src.models.base import async_session_factory
+        from src.models.portfolio import Portfolio, Position, PortfolioSnapshot
+
+        today = date_type.today()
+
+        try:
+            async with async_session_factory() as session:
+                # Get all portfolios
+                result = await session.execute(select(Portfolio))
+                portfolios = result.scalars().all()
+
+                for p in portfolios:
+                    # Check if we already have a snapshot for today
+                    existing = await session.execute(
+                        select(PortfolioSnapshot)
+                        .where(PortfolioSnapshot.portfolio_id == p.id)
+                        .where(PortfolioSnapshot.snapshot_date == today)
+                    )
+                    snap = existing.scalar_one_or_none()
+
+                    # Compute current values
+                    pos_result = await session.execute(
+                        select(Position).where(Position.portfolio_id == p.id)
+                    )
+                    positions = pos_result.scalars().all()
+
+                    total_mv = 0.0
+                    total_pnl = 0.0
+                    for pos in positions:
+                        cached = self.get_price(pos.ticker)
+                        cp = cached.price if cached else (pos.current_price or 0)
+                        qty = pos.quantity or 0
+                        entry = pos.avg_entry_price or 0
+                        mv = qty * cp
+                        total_mv += mv
+                        pnl = (cp - entry) * qty if entry > 0 else 0
+                        if pos.direction == "short":
+                            pnl = -pnl
+                        total_pnl += pnl
+
+                    total_value = total_mv + (p.cash or 0)
+
+                    if snap:
+                        # Update today's snapshot
+                        snap.total_value = round(total_value, 2)
+                        snap.invested = round(total_mv, 2)
+                        snap.cash = p.cash or 0
+                        snap.pnl = round(total_pnl, 2)
+                        snap.positions_count = len(positions)
+                    else:
+                        # Create new snapshot
+                        from uuid import uuid4
+                        snap = PortfolioSnapshot(
+                            id=str(uuid4()),
+                            portfolio_id=p.id,
+                            snapshot_date=today,
+                            total_value=round(total_value, 2),
+                            invested=round(total_mv, 2),
+                            cash=p.cash or 0,
+                            pnl=round(total_pnl, 2),
+                            positions_count=len(positions),
+                        )
+                        session.add(snap)
+
+                await session.commit()
+                logger.info("Portfolio snapshots recorded for %d portfolios", len(portfolios))
+        except Exception:
+            logger.warning("Error recording portfolio snapshots", exc_info=True)
 
 
 # ------------------------------------------------------------------

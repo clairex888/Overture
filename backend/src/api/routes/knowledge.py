@@ -325,10 +325,67 @@ async def get_market_outlook(session: AsyncSession = Depends(get_session)):
 
 
 @router.get("/sources", response_model=list[SourceCredibility])
-async def get_sources():
-    """Get source credibility rankings."""
-    sorted_sources = sorted(_sources_store, key=lambda s: s["credibility_score"], reverse=True)
-    return [SourceCredibility(**s) for s in sorted_sources]
+async def get_sources(session: AsyncSession = Depends(get_session)):
+    """Get source credibility rankings from actual knowledge entries.
+
+    Aggregates sources dynamically from the knowledge library: for each
+    distinct source name, counts entries, averages credibility scores,
+    and finds the most recent fetch time. Falls back to static defaults
+    for well-known sources not yet in the DB.
+    """
+    from sqlalchemy import func as sqlfunc
+
+    # Query distinct sources from knowledge entries
+    stmt = (
+        select(
+            KnowledgeEntry.source,
+            sqlfunc.count(KnowledgeEntry.id).label("total_entries"),
+            sqlfunc.avg(KnowledgeEntry.source_credibility_score).label("avg_score"),
+            sqlfunc.max(KnowledgeEntry.created_at).label("last_entry"),
+        )
+        .where(KnowledgeEntry.source.isnot(None))
+        .group_by(KnowledgeEntry.source)
+        .order_by(sqlfunc.avg(KnowledgeEntry.source_credibility_score).desc())
+    )
+    result = await session.execute(stmt)
+    rows = result.all()
+
+    # Source type heuristics
+    def _classify_source(name: str) -> str:
+        n = name.lower()
+        if any(kw in n for kw in ["api", "yahoo", "coingecko", "alpha vantage"]):
+            return "api"
+        if any(kw in n for kw in ["research", "goldman", "morgan", "morningstar"]):
+            return "research"
+        if any(kw in n for kw in ["reddit", "twitter", "x.com", "social", "substack"]):
+            return "social"
+        if any(kw in n for kw in ["fed", "sec", "treasury", "official", "government"]):
+            return "official"
+        if any(kw in n for kw in ["user upload", "manual"]):
+            return "user"
+        return "news"
+
+    sources: list[SourceCredibility] = []
+    for row in rows:
+        name = row.source or "Unknown"
+        avg_score = float(row.avg_score or 0.5)
+        total = int(row.total_entries or 0)
+        last = _dt_iso(row.last_entry) if row.last_entry else None
+        sources.append(SourceCredibility(
+            name=name,
+            type=_classify_source(name),
+            credibility_score=round(avg_score, 2),
+            accuracy_history=round(avg_score * 0.95, 2),  # approximation until tracked
+            total_entries=total,
+            last_fetched=last,
+        ))
+
+    # If no DB sources, fall back to defaults so the page isn't empty
+    if not sources:
+        sorted_sources = sorted(_sources_store, key=lambda s: s["credibility_score"], reverse=True)
+        return [SourceCredibility(**s) for s in sorted_sources]
+
+    return sources
 
 
 @router.get("/education", response_model=list[EducationalContent])
@@ -575,13 +632,33 @@ async def update_outlook(
 async def trigger_data_pipeline():
     """Trigger the data pipeline to fetch latest data from all sources.
 
-    In production this invokes the KnowledgeAgent's data ingestion pipeline.
+    Actually runs the DataPipeline.collect() if available, otherwise
+    returns a stub result.
     """
+    import time
+    start = time.time()
+    errors: list[str] = []
+    sources_queried = 0
+    new_entries = 0
+
+    try:
+        from src.services.data_pipeline import data_pipeline
+        if data_pipeline is not None:
+            snapshot = await data_pipeline.collect()
+            sources_queried = len(snapshot.sources) if hasattr(snapshot, "sources") else 3
+            new_entries = len(snapshot.news_items) if snapshot.news_items else 0
+        else:
+            errors.append("Data pipeline not initialized")
+    except Exception as exc:
+        logger.warning("Data pipeline trigger failed: %s", exc)
+        errors.append(str(exc))
+
+    elapsed = (time.time() - start) * 1000
     return DataPipelineResult(
         triggered_at=_now_iso(),
-        sources_queried=len(_sources_store),
-        new_entries=12,
-        updated_entries=5,
-        errors=[],
-        duration_ms=4500.0,
+        sources_queried=sources_queried,
+        new_entries=new_entries,
+        updated_entries=0,
+        errors=errors,
+        duration_ms=round(elapsed, 1),
     )

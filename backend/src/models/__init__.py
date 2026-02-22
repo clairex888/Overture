@@ -24,7 +24,7 @@ from src.models.knowledge import (
     MarketOutlook,
     OutlookSentiment,
 )
-from src.models.portfolio import Portfolio, PortfolioStatus, Position
+from src.models.portfolio import Portfolio, PortfolioSnapshot, PortfolioStatus, Position
 from src.models.rl import RLEpisode, RLExperience
 from src.models.trade import InstrumentType, Trade, TradeDirection, TradeStatus
 
@@ -49,6 +49,7 @@ __all__ = [
     "InstrumentType",
     # Portfolio
     "Portfolio",
+    "PortfolioSnapshot",
     "PortfolioStatus",
     "Position",
     # Knowledge

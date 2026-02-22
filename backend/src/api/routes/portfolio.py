@@ -17,7 +17,7 @@ from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.base import get_session
-from src.models.portfolio import Portfolio, Position as PositionModel, PortfolioStatus
+from src.models.portfolio import Portfolio, Position as PositionModel, PortfolioStatus, PortfolioSnapshot
 from src.models.trade import Trade, TradeStatus, TradeDirection, InstrumentType
 from src.models.user import User
 from src.auth import get_current_user
@@ -1219,3 +1219,195 @@ async def delete_portfolio(
         success=True,
         message=f"Portfolio '{portfolio.name}' deleted successfully.",
     )
+
+
+# ---------------------------------------------------------------------------
+# Aggregate endpoint for dashboard
+# ---------------------------------------------------------------------------
+
+
+class AggregatePortfolioResponse(BaseModel):
+    total_aum: float
+    total_cash: float
+    total_invested: float
+    total_pnl: float
+    total_pnl_pct: float
+    total_positions: int
+    portfolio_count: int
+    top_holdings: list[dict[str, Any]] = Field(default_factory=list)
+    sector_exposure: dict[str, float] = Field(default_factory=dict)
+    last_updated: str
+
+
+@router.get("/aggregate", response_model=AggregatePortfolioResponse)
+async def get_aggregate(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Aggregate stats across ALL user portfolios for the dashboard."""
+    result = await session.execute(
+        select(Portfolio).where(Portfolio.user_id == user.id)
+    )
+    portfolios = result.scalars().all()
+
+    from src.services.price_cache import PriceCacheService
+    cache = PriceCacheService.get_instance()
+
+    total_aum = 0.0
+    total_cash = 0.0
+    total_invested = 0.0
+    total_pnl = 0.0
+    total_initial = 0.0
+    total_positions = 0
+    all_holdings: list[dict] = []
+    sector_map: dict[str, float] = {}
+
+    for p in portfolios:
+        pos_result = await session.execute(
+            select(PositionModel).where(PositionModel.portfolio_id == p.id)
+        )
+        positions = pos_result.scalars().all()
+        total_positions += len(positions)
+        total_cash += p.cash or 0
+
+        for pos in positions:
+            cached = cache.get_price(pos.ticker)
+            cp = cached.price if cached else (pos.current_price or 0)
+            qty = pos.quantity or 0
+            entry = pos.avg_entry_price or 0
+            mv = qty * cp
+            total_invested += mv
+            pnl = (cp - entry) * qty if entry > 0 else 0
+            if pos.direction == "short":
+                pnl = -pnl
+            total_pnl += pnl
+            if entry > 0:
+                total_initial += entry * qty
+
+            all_holdings.append({
+                "symbol": pos.ticker,
+                "market_value": round(mv, 2),
+                "pnl": round(pnl, 2),
+                "weight": 0,  # computed below
+                "asset_class": pos.asset_class or "equity",
+                "portfolio": p.name,
+            })
+
+            ac = pos.asset_class or "equity"
+            sector_map[ac] = sector_map.get(ac, 0) + mv
+
+    total_aum = total_invested + total_cash
+
+    # Compute weights and sort for top holdings
+    for h in all_holdings:
+        h["weight"] = round(h["market_value"] / total_aum * 100, 2) if total_aum > 0 else 0
+    all_holdings.sort(key=lambda x: x["market_value"], reverse=True)
+
+    # Normalize sector exposure to percentages
+    for k in sector_map:
+        sector_map[k] = round(sector_map[k] / total_aum * 100, 2) if total_aum > 0 else 0
+
+    pnl_pct = (total_pnl / total_initial * 100) if total_initial > 0 else 0
+
+    return AggregatePortfolioResponse(
+        total_aum=round(total_aum, 2),
+        total_cash=round(total_cash, 2),
+        total_invested=round(total_invested, 2),
+        total_pnl=round(total_pnl, 2),
+        total_pnl_pct=round(pnl_pct, 4),
+        total_positions=total_positions,
+        portfolio_count=len(portfolios),
+        top_holdings=all_holdings[:10],
+        sector_exposure=sector_map,
+        last_updated=datetime.utcnow().isoformat() + "Z",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Portfolio history endpoint
+# ---------------------------------------------------------------------------
+
+
+class PortfolioHistoryPoint(BaseModel):
+    date: str
+    total_value: float
+    pnl: float
+
+
+@router.get("/history", response_model=list[PortfolioHistoryPoint])
+async def get_portfolio_history(
+    portfolio_id: str | None = Query(None, description="Specific portfolio, or all if omitted"),
+    days: int = Query(90, ge=7, le=365),
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Return daily portfolio value snapshots for the chart.
+
+    If no snapshots exist yet, returns a single point for today's value.
+    """
+    from datetime import timedelta, date as date_type
+    from sqlalchemy import func as sqlfunc
+
+    cutoff = date_type.today() - timedelta(days=days)
+
+    if portfolio_id:
+        # Verify ownership
+        await _get_portfolio_by_id(session, portfolio_id, user.id)
+        stmt = (
+            select(
+                PortfolioSnapshot.snapshot_date,
+                PortfolioSnapshot.total_value,
+                PortfolioSnapshot.pnl,
+            )
+            .where(PortfolioSnapshot.portfolio_id == portfolio_id)
+            .where(PortfolioSnapshot.snapshot_date >= cutoff)
+            .order_by(PortfolioSnapshot.snapshot_date)
+        )
+    else:
+        # Aggregate across all user portfolios
+        p_ids = await session.execute(
+            select(Portfolio.id).where(Portfolio.user_id == user.id)
+        )
+        ids = [r[0] for r in p_ids.all()]
+        if not ids:
+            return []
+        stmt = (
+            select(
+                PortfolioSnapshot.snapshot_date,
+                sqlfunc.sum(PortfolioSnapshot.total_value).label("total_value"),
+                sqlfunc.sum(PortfolioSnapshot.pnl).label("pnl"),
+            )
+            .where(PortfolioSnapshot.portfolio_id.in_(ids))
+            .where(PortfolioSnapshot.snapshot_date >= cutoff)
+            .group_by(PortfolioSnapshot.snapshot_date)
+            .order_by(PortfolioSnapshot.snapshot_date)
+        )
+
+    result = await session.execute(stmt)
+    rows = result.all()
+
+    if not rows:
+        # No history yet — return current value as a single point
+        if portfolio_id:
+            p = await _get_portfolio_by_id(session, portfolio_id, user.id)
+            total = p.total_value or 0
+        else:
+            agg = await session.execute(
+                select(Portfolio).where(Portfolio.user_id == user.id)
+            )
+            all_p = agg.scalars().all()
+            total = sum((p.total_value or 0) for p in all_p)
+        return [PortfolioHistoryPoint(
+            date=date_type.today().isoformat(),
+            total_value=round(total, 2),
+            pnl=0,
+        )]
+
+    return [
+        PortfolioHistoryPoint(
+            date=r.snapshot_date.isoformat() if hasattr(r.snapshot_date, 'isoformat') else str(r.snapshot_date),
+            total_value=round(float(r.total_value or 0), 2),
+            pnl=round(float(r.pnl or 0), 2),
+        )
+        for r in rows
+    ]

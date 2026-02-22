@@ -14,6 +14,9 @@ import type {
   ApproveResult,
   PortfolioListItem,
   PortfolioInitResult,
+  AggregatePortfolio,
+  DashboardNewsItem,
+  PortfolioHistoryPoint,
   AllAgentsStatus,
   AgentLogEntry,
   LoopControlResponse,
@@ -266,6 +269,12 @@ export const portfolioAPI = {
     fetchAPI<{ success: boolean; message: string }>(`/api/portfolio/${portfolioId}`, {
       method: 'DELETE',
     }),
+  aggregate: () =>
+    fetchAPI<AggregatePortfolio>('/api/portfolio/aggregate'),
+  history: (days = 90, portfolioId?: string) =>
+    fetchAPI<PortfolioHistoryPoint[]>(
+      `/api/portfolio/history?days=${days}${portfolioId ? `&portfolio_id=${portfolioId}` : ''}`,
+    ),
 };
 
 // Trades API
@@ -428,6 +437,8 @@ export const marketDataAPI = {
       refresh_interval_seconds: number;
       prices: Record<string, any>;
     }>('/api/market-data/price-cache-status'),
+  latestNews: (limit = 10) =>
+    fetchAPI<DashboardNewsItem[]>(`/api/market-data/latest-news?limit=${limit}`),
 };
 
 // Seed API

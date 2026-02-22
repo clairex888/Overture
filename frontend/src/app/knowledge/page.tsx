@@ -101,6 +101,9 @@ export default function KnowledgePage() {
   const [uploadTags, setUploadTags] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Document viewer state
+  const [viewingEntry, setViewingEntry] = useState<KnowledgeEntry | null>(null);
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -183,7 +186,16 @@ export default function KnowledgePage() {
       setUploadTags('');
       await fetchData();
     } catch (err) {
-      setUploadError(err instanceof Error ? err.message : 'Upload failed');
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('401') || msg.includes('unauthorized') || msg.includes('Unauthorized')) {
+        setUploadError('Please log in first to upload documents.');
+      } else if (msg.includes('413')) {
+        setUploadError('File is too large (max 10 MB).');
+      } else if (msg.includes('400')) {
+        setUploadError('Could not extract text from file. Try a different format (PDF, TXT, MD, CSV).');
+      } else {
+        setUploadError(msg || 'Upload failed. Please try again.');
+      }
     } finally {
       setUploading(false);
     }
@@ -279,6 +291,8 @@ export default function KnowledgePage() {
               setShowUpload(true);
               setUploadFile(null);
               setUploadTitle('');
+              setUploadTags('');
+              setUploadError(null);
             }}
           >
             <Upload className="w-4 h-4" />
@@ -501,7 +515,8 @@ export default function KnowledgePage() {
             return (
               <div
                 key={entry.id}
-                className="p-4 rounded-lg bg-dark-800 border border-white/[0.05] hover:border-white/[0.1] transition-colors"
+                className="p-4 rounded-lg bg-dark-800 border border-white/[0.05] hover:border-white/[0.1] transition-colors cursor-pointer"
+                onClick={() => setViewingEntry(entry)}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
@@ -532,6 +547,14 @@ export default function KnowledgePage() {
                         ? entry.content.slice(0, 500) + '...'
                         : entry.content}
                     </p>
+                    {entry.content.length > 500 && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setViewingEntry(entry); }}
+                        className="text-[11px] text-info hover:underline mb-2"
+                      >
+                        View full document
+                      </button>
+                    )}
                     <div className="flex items-center gap-4 text-[11px] text-text-muted flex-wrap">
                       <span className="flex items-center gap-1">
                         <ExternalLink className="w-3 h-3" />
@@ -613,6 +636,7 @@ export default function KnowledgePage() {
             <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
               <Shield className="w-4 h-4 text-info" />
               Source Credibility Rankings
+              <span className="text-[10px] text-text-muted font-normal ml-1">Live from library</span>
             </h3>
           </div>
           <div className="overflow-x-auto">
@@ -800,6 +824,79 @@ export default function KnowledgePage() {
           )}
         </div>
       </div>
+
+      {/* ── Document Viewer Modal ── */}
+      {viewingEntry && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-6">
+          <div className="bg-dark-800 rounded-xl border border-white/[0.1] w-full max-w-3xl max-h-[80vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-start justify-between p-5 border-b border-white/[0.06]">
+              <div className="flex-1 min-w-0 mr-4">
+                <h2 className="text-lg font-semibold text-text-primary mb-1">{viewingEntry.title}</h2>
+                <div className="flex items-center gap-3 text-xs text-text-muted flex-wrap">
+                  <span className={`status-badge text-[10px] ${categoryColors[viewingEntry.category] || 'text-text-secondary bg-dark-500'}`}>
+                    {viewingEntry.category}
+                  </span>
+                  <span>Source: {viewingEntry.source}</span>
+                  <span>Confidence: {Math.round(viewingEntry.confidence * 100)}%</span>
+                  <span>{new Date(viewingEntry.created_at).toLocaleDateString()}</span>
+                  {viewingEntry.file_name && (
+                    <span className="flex items-center gap-1 text-info">
+                      <FileText className="w-3 h-3" />
+                      {viewingEntry.file_name}
+                    </span>
+                  )}
+                </div>
+                {viewingEntry.tickers && viewingEntry.tickers.length > 0 && (
+                  <div className="flex gap-1 mt-2">
+                    {viewingEntry.tickers.map((t) => (
+                      <span key={t} className="px-1.5 py-0.5 rounded bg-dark-600 text-[10px] font-mono text-info">
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={() => setViewingEntry(null)}
+                className="p-1.5 rounded-lg hover:bg-dark-600 transition-colors text-text-muted"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto p-5">
+              <div className="prose prose-invert max-w-none">
+                <pre className="text-xs text-text-secondary leading-relaxed whitespace-pre-wrap font-sans">
+                  {viewingEntry.content}
+                </pre>
+              </div>
+            </div>
+            {/* Footer */}
+            <div className="flex items-center justify-between p-4 border-t border-white/[0.06]">
+              <span className="text-[10px] text-text-muted">
+                {viewingEntry.content.length.toLocaleString()} characters
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(viewingEntry.content);
+                  }}
+                  className="btn-secondary text-xs px-3 py-1.5"
+                >
+                  Copy to Clipboard
+                </button>
+                <button
+                  onClick={() => setViewingEntry(null)}
+                  className="btn-primary text-xs px-3 py-1.5"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

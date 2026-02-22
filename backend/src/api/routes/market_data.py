@@ -843,10 +843,11 @@ async def get_latest_news(limit: int = 10):
         from src.services.data_pipeline import data_pipeline
         if data_pipeline is None:
             return []
-        # Use cached snapshot if available, otherwise quick collect
+        # Use cached snapshot only — never trigger an expensive collect()
+        # from a GET endpoint. Users should trigger the pipeline explicitly.
         snapshot = getattr(data_pipeline, "_last_snapshot", None)
         if snapshot is None:
-            snapshot = await data_pipeline.collect()
+            return []
         items = snapshot.news_items[:limit] if snapshot.news_items else []
         return [
             DashboardNewsItem(

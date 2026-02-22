@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   DollarSign,
@@ -8,7 +8,6 @@ import {
   TrendingDown,
   Lightbulb,
   ArrowLeftRight,
-  Shield,
   Bot,
   Loader2,
   Power,
@@ -21,7 +20,6 @@ import {
   Globe,
   Newspaper,
   ExternalLink,
-  AlertTriangle,
   Target,
   BarChart3,
 } from 'lucide-react';
@@ -387,7 +385,7 @@ export default function Dashboard() {
           )}
 
           {/* Top Holdings & Exposure */}
-          {aggregate && aggregate.top_holdings.length > 0 && (
+          {aggregate && aggregate.top_holdings?.length > 0 && (
             <div className="mt-4 pt-4 border-t border-white/[0.06]">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Top Holdings */}

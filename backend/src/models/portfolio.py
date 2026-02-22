@@ -4,7 +4,7 @@ import enum
 from datetime import datetime, date as date_type
 from typing import Any, Optional
 
-from sqlalchemy import Enum, Float, ForeignKey, String, Text, Date, func
+from sqlalchemy import Enum, Float, ForeignKey, Integer, String, Text, Date, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -124,6 +124,9 @@ class PortfolioSnapshot(Base):
     """
 
     __tablename__ = "portfolio_snapshots"
+    __table_args__ = (
+        UniqueConstraint("portfolio_id", "snapshot_date", name="uq_portfolio_snapshot_date"),
+    )
 
     portfolio_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
@@ -136,7 +139,7 @@ class PortfolioSnapshot(Base):
     invested: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     cash: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     pnl: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    positions_count: Mapped[Optional[int]] = mapped_column(nullable=True)
+    positions_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     def __repr__(self) -> str:
         return f"<PortfolioSnapshot(portfolio_id={self.portfolio_id!r}, date={self.snapshot_date!r}, value={self.total_value!r})>"

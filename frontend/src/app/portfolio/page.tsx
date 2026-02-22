@@ -14,9 +14,6 @@ import {
   BarChart3,
   Target,
   AlertTriangle,
-  ArrowUp,
-  ArrowDown,
-  Minus,
   Loader2,
   Rocket,
   CheckCircle2,
@@ -37,13 +34,12 @@ import {
   Tooltip,
   Legend,
 } from 'recharts';
-import { portfolioAPI, knowledgeAPI, marketDataAPI } from '@/lib/api';
+import { portfolioAPI, marketDataAPI } from '@/lib/api';
 import type {
   PortfolioOverview,
   Position,
   RiskMetrics,
   AllocationBreakdown,
-  MarketOutlook,
   PortfolioListItem,
 } from '@/types';
 
@@ -82,17 +78,6 @@ function getColorForCategory(category: string, index: number): string {
   return CATEGORY_COLORS[category] || DEFAULT_COLORS[index % DEFAULT_COLORS.length];
 }
 
-const outlookColors: Record<string, string> = {
-  bullish: 'text-profit',
-  neutral: 'text-warning',
-  bearish: 'text-loss',
-};
-
-const outlookIcons: Record<string, typeof ArrowUp> = {
-  bullish: ArrowUp,
-  neutral: Minus,
-  bearish: ArrowDown,
-};
 
 function formatCurrency(value: number): string {
   const absValue = Math.abs(value);
@@ -573,14 +558,6 @@ function PortfolioPageInner() {
     last_updated: '',
   });
 
-  const [outlook, setOutlook] = useState<MarketOutlook>({
-    long_term: { layer: 'long_term', sentiment: 'neutral', confidence: 0, summary: '', key_factors: [], risks: [], opportunities: [], last_updated: '' },
-    medium_term: { layer: 'medium_term', sentiment: 'neutral', confidence: 0, summary: '', key_factors: [], risks: [], opportunities: [], last_updated: '' },
-    short_term: { layer: 'short_term', sentiment: 'neutral', confidence: 0, summary: '', key_factors: [], risks: [], opportunities: [], last_updated: '' },
-    consensus_sentiment: 'neutral',
-    last_updated: '',
-  });
-
   // Price refresh state
   const [refreshing, setRefreshing] = useState(false);
   const [lastPriceUpdate, setLastPriceUpdate] = useState<string | null>(null);
@@ -601,7 +578,6 @@ function PortfolioPageInner() {
         portfolioAPI.positions(portfolioId),
         portfolioAPI.risk(portfolioId),
         portfolioAPI.allocation(portfolioId),
-        knowledgeAPI.outlook(),
       ]);
 
       if (results[0].status === 'fulfilled') {
@@ -611,12 +587,11 @@ function PortfolioPageInner() {
       if (results[1].status === 'fulfilled') setPositions(results[1].value);
       if (results[2].status === 'fulfilled') setRisk(results[2].value);
       if (results[3].status === 'fulfilled') setAllocation(results[3].value);
-      if (results[4].status === 'fulfilled') setOutlook(results[4].value);
 
       // Log any failures for debugging
       results.forEach((r, i) => {
         if (r.status === 'rejected') {
-          const names = ['overview', 'positions', 'risk', 'allocation', 'outlook'];
+          const names = ['overview', 'positions', 'risk', 'allocation'];
           console.error(`[Portfolio] Failed to fetch ${names[i]}:`, r.reason);
         }
       });
@@ -802,12 +777,6 @@ function PortfolioPageInner() {
   const riskScore = deriveRiskScore(risk);
   const pnlIsPositive = overview.total_pnl >= 0;
   const pnlColorClass = pnlIsPositive ? 'text-profit' : 'text-loss';
-
-  const outlookSections = [
-    { title: 'Long-term (6-12 mo)', data: outlook.long_term },
-    { title: 'Mid-term (1-6 mo)', data: outlook.medium_term },
-    { title: 'Short-term (1-4 wk)', data: outlook.short_term },
-  ];
 
   // Show loading skeleton while fetching portfolio list
   if (listLoading) {

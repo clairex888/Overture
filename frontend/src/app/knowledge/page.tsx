@@ -291,6 +291,8 @@ export default function KnowledgePage() {
               setShowUpload(true);
               setUploadFile(null);
               setUploadTitle('');
+              setUploadTags('');
+              setUploadError(null);
             }}
           >
             <Upload className="w-4 h-4" />

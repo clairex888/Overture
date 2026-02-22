@@ -1388,11 +1388,15 @@ async def get_portfolio_history(
 
     if not rows:
         # No history yet — return current value as a single point
-        agg = await session.execute(
-            select(Portfolio).where(Portfolio.user_id == user.id)
-        )
-        portfolios = agg.scalars().all()
-        total = sum((p.total_value or 0) for p in portfolios)
+        if portfolio_id:
+            p = await _get_portfolio_by_id(session, portfolio_id, user.id)
+            total = p.total_value or 0
+        else:
+            agg = await session.execute(
+                select(Portfolio).where(Portfolio.user_id == user.id)
+            )
+            all_p = agg.scalars().all()
+            total = sum((p.total_value or 0) for p in all_p)
         return [PortfolioHistoryPoint(
             date=date_type.today().isoformat(),
             total_value=round(total, 2),

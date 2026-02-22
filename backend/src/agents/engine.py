@@ -78,6 +78,7 @@ class AgentEngine:
         self._idea_state: dict = {}
         self._portfolio_state: dict = {}
         self._iteration_counts = {"idea": 0, "portfolio": 0}
+        self._engine_started_at = datetime.now(timezone.utc)
         self._started_at: dict[str, datetime | None] = {
             "idea": None, "portfolio": None,
         }
@@ -476,9 +477,13 @@ class AgentEngine:
         stats["current_task"] = task_desc
 
         # Fire-and-forget DB persistence (non-blocking)
-        asyncio.ensure_future(self._persist_agent_log(
-            agent_key, task_desc or ("error" if error else "task"), error,
-        ))
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._persist_agent_log(
+                agent_key, task_desc or ("error" if error else "task"), error,
+            ))
+        except RuntimeError:
+            pass  # No running event loop — skip persistence
 
     def _set_agent_task(self, agent_key: str, task_desc: str | None) -> None:
         """Set the current task description for an agent."""
@@ -516,7 +521,7 @@ class AgentEngine:
                 session.add(log)
                 await session.commit()
         except Exception:
-            logger.debug("Failed to persist agent log (non-critical)", exc_info=True)
+            logger.warning("Failed to persist agent log", exc_info=True)
 
     def get_agent_statuses(self) -> dict:
         """Return individual agent statuses for the frontend.
@@ -541,9 +546,12 @@ class AgentEngine:
         for key in self.AGENT_KEYS:
             display_name, running = _AGENT_META[key]
             stats = self._agent_stats[key]
-            # Compute uptime from loop start time
-            loop_key = "idea" if key in ("idea_generator", "idea_validator", "trade_executor", "trade_monitor") else "portfolio"
-            started = self._started_at.get(loop_key)
+            # Compute uptime from loop start time (knowledge uses engine start)
+            if key == "knowledge":
+                started = self._engine_started_at
+            else:
+                loop_key = "idea" if key in ("idea_generator", "idea_validator", "trade_executor", "trade_monitor") else "portfolio"
+                started = self._started_at.get(loop_key)
             uptime = 0.0
             if running and started:
                 uptime = (datetime.now(timezone.utc) - started).total_seconds()
